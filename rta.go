@@ -561,3 +561,74 @@ func implements(cinfo *concreteTypeInfo, iinfo *interfaceTypeInfo) (got bool) {
 	// test to reject most candidates quickly.
 	return iinfo.fprint & ^cinfo.fprint == 0 && types.Implements(cinfo.C, iinfo.I)
 }
+
+// Contains the state needed to perform incremental RTA.
+type RTAState struct {
+	prog             *ssa.Program
+	reflectValueCall *ssa.Function
+
+	addrTakenFuncsBySig typeutil.Map
+	dynCallSites        typeutil.Map
+	invokeSites         typeutil.Map
+	concreteTypes       typeutil.Map
+	interfaceTypes      typeutil.Map
+}
+
+type ResultWithState struct {
+	Result *Result
+	State  *RTAState
+}
+
+// IncrementalAnalyze performs RTA starting from the given roots.
+// If prevRun is nil, it behaves like Analyze but returns the analysis state as well.
+// If prevRun is !nil, it reuses the analysis state and roots would be the changed functions.
+
+// NOTE: For now let's assume that it always builds the call graph.
+func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *ResultWithState {
+	if len(roots) == 0 {
+		return nil
+	}
+
+	r := &rta{
+		result: &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
+		prog:   roots[0].Prog,
+	}
+
+	if buildCallGraph {
+		// TODO(adonovan): change callgraph API to eliminate the
+		// notion of a distinguished root node.  Some callgraphs
+		// have many roots, or none.
+		r.result.CallGraph = callgraph.New(roots[0])
+	}
+
+	// Grab ssa.Function for (*reflect.Value).Call,
+	// if "reflect" is among the dependencies.
+	if reflectPkg := r.prog.ImportedPackage("reflect"); reflectPkg != nil {
+		reflectValue := reflectPkg.Members["Value"].(*ssa.Type)
+		r.reflectValueCall = r.prog.LookupMethod(reflectValue.Object().Type(), reflectPkg.Pkg, "Call")
+	}
+
+	hasher := typeutil.MakeHasher()
+	r.result.RuntimeTypes.SetHasher(hasher)
+	r.addrTakenFuncsBySig.SetHasher(hasher)
+	r.dynCallSites.SetHasher(hasher)
+	r.invokeSites.SetHasher(hasher)
+	r.concreteTypes.SetHasher(hasher)
+	r.interfaceTypes.SetHasher(hasher)
+
+	for _, root := range roots {
+		r.addReachable(root, false)
+	}
+
+	// Visit functions, processing their instructions, and adding
+	// new functions to the worklist, until a fixed point is
+	// reached.
+	var shadow []*ssa.Function // for efficiency, we double-buffer the worklist
+	for len(r.worklist) > 0 {
+		shadow, r.worklist = r.worklist, shadow[:0]
+		for _, f := range shadow {
+			r.visitFunc(f)
+		}
+	}
+	return r.result
+}
