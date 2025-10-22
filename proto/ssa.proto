@@ -1,0 +1,27 @@
+syntax="proto3";
+
+package ssa;
+
+option go_package = "rta/proto/pb";
+
+message Package {
+    string name = 1;
+    string path = 2;
+}
+
+message Function {
+    // hash will be an easy way to see if a function has changed
+    string hash = 1;
+
+    string name = 2;
+    string signature = 3;
+    Package package = 4; 
+}
+
+message CallSite {
+    string hash = 1;
+
+    Function parent_function = 2;
+    string signature = 3;
+    int32 block_index = 4;
+}

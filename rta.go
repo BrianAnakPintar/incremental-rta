@@ -532,7 +532,8 @@ func (r *rta) addRuntimeType(T types.Type, skip bool) {
 		}
 
 	default:
-		panic(T)
+		// panic(T)
+		panic(fmt.Sprintf("unexpected type in addRuntimeType: %T (%v)", t, t))
 	}
 }
 
@@ -565,13 +566,13 @@ func implements(cinfo *concreteTypeInfo, iinfo *interfaceTypeInfo) (got bool) {
 // Contains the state needed to perform incremental RTA.
 type RTAState struct {
 	prog             *ssa.Program
-	reflectValueCall *ssa.Function
+	ReflectValueCall *ssa.Function
 
-	addrTakenFuncsBySig typeutil.Map
-	dynCallSites        typeutil.Map
-	invokeSites         typeutil.Map
-	concreteTypes       typeutil.Map
-	interfaceTypes      typeutil.Map
+	AddrTakenFuncsBySig typeutil.Map
+	DynCallSites        typeutil.Map
+	InvokeSites         typeutil.Map
+	ConcreteTypes       typeutil.Map
+	InterfaceTypes      typeutil.Map
 }
 
 type ResultWithState struct {
@@ -585,8 +586,13 @@ type ResultWithState struct {
 
 // NOTE: For now let's assume that it always builds the call graph.
 func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *ResultWithState {
-	if len(roots) == 0 {
-		return nil
+	// TODO(brian): Consider the case of removing a root. This would require us to prune the CG.
+
+	if prevRun == nil {
+		// No need to do pruning
+	} else {
+		// We have to prune our stuff
+
 	}
 
 	r := &rta{
@@ -594,12 +600,8 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 		prog:   roots[0].Prog,
 	}
 
-	if buildCallGraph {
-		// TODO(adonovan): change callgraph API to eliminate the
-		// notion of a distinguished root node.  Some callgraphs
-		// have many roots, or none.
-		r.result.CallGraph = callgraph.New(roots[0])
-	}
+	// Assume we always build the call graph for now.
+	r.result.CallGraph = callgraph.New(roots[0])
 
 	// Grab ssa.Function for (*reflect.Value).Call,
 	// if "reflect" is among the dependencies.
@@ -607,14 +609,6 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 		reflectValue := reflectPkg.Members["Value"].(*ssa.Type)
 		r.reflectValueCall = r.prog.LookupMethod(reflectValue.Object().Type(), reflectPkg.Pkg, "Call")
 	}
-
-	hasher := typeutil.MakeHasher()
-	r.result.RuntimeTypes.SetHasher(hasher)
-	r.addrTakenFuncsBySig.SetHasher(hasher)
-	r.dynCallSites.SetHasher(hasher)
-	r.invokeSites.SetHasher(hasher)
-	r.concreteTypes.SetHasher(hasher)
-	r.interfaceTypes.SetHasher(hasher)
 
 	for _, root := range roots {
 		r.addReachable(root, false)
@@ -630,5 +624,22 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 			r.visitFunc(f)
 		}
 	}
-	return r.result
+
+	res := &ResultWithState{
+		Result: r.result,
+		State:  saveRTAState(r),
+	}
+	return res
+}
+
+func saveRTAState(r *rta) *RTAState {
+	return &RTAState{
+		prog:                r.prog,
+		ReflectValueCall:    r.reflectValueCall,
+		AddrTakenFuncsBySig: r.addrTakenFuncsBySig,
+		DynCallSites:        r.dynCallSites,
+		InvokeSites:         r.invokeSites,
+		ConcreteTypes:       r.concreteTypes,
+		InterfaceTypes:      r.interfaceTypes,
+	}
 }

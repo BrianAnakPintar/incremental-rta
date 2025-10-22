@@ -1,0 +1,38 @@
+syntax="proto3";
+
+import "ssa.proto";
+
+package callgraph;
+
+option go_package = "rta/proto/pb";
+
+message CallGraph {
+    Node root = 1;
+    
+    /*
+        Note: Ideally this would be map<Function, Node>, but maps with
+        message keys are not supported in proto3.
+
+        Instead of using map<string, Node> with the Function's hash as the key, we use []Node.
+        Since this is just serialization, we don't even need to do any lookup since we're
+        can reconstruct the map for the actual CG by iterating over the nodes (Grab the node's fn).
+
+    */
+    repeated Node nodes = 2;
+}
+
+message Node {
+    ssa.Function function = 1;
+    repeated Edge in = 2;
+    repeated Edge out = 3;
+}
+
+message Edge {
+    /*
+        Store ssa.function because using Node would create a cyclic dependency,
+        which proto3 does not support. (It broke VSCode)
+    */
+    ssa.Function caller = 1;
+    ssa.CallSite site = 2;
+    ssa.Function callee = 3;
+}
