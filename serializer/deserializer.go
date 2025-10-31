@@ -3,7 +3,6 @@ package serializer
 import (
 	"fmt"
 	"go/types"
-	"log"
 	"rta"
 	pb "rta/proto/generated"
 
@@ -41,12 +40,173 @@ func NewDeserializer(prog *ssa.Program) *Deserializer {
 This one is stupid. Because I think it has the same runtime as running RTA again.
 */
 func (d *Deserializer) deserializeAllFunctions() {
+	visitedTypes := make(map[string]bool) // Use string representation to avoid issues with type identity
 
-	d.functions = BuildDefinitiveFunctionMap(d.prog)
+	// First, collect all types from package members
+	for _, pkg := range d.prog.AllPackages() {
+		for _, member := range pkg.Members {
+			if t, ok := member.(*ssa.Type); ok {
+				d.exploreTypeRecursively(t.Type(), visitedTypes)
+			}
+		}
+	}
+
+	// Also collect types from all functions' signatures and instructions,
+	// including functions with pkg=nil (like generated/synthetic functions)
 	fns := ssautil.AllFunctions(d.prog)
 	for fn := range fns {
 		hash := hashFunction(fn)
 		d.functions[hash] = fn
+		d.collectTypesFromFunction(fn, visitedTypes)
+	}
+
+}
+
+/*
+deserializeRuntimeTypeMethods adds method values for all runtime types that may be
+called via reflection. This handles exported methods of runtime types that are
+created via prog.MethodValue() but not included in ssautil.AllFunctions.
+This includes types from package members and types discovered in function signatures
+and instructions, including those from functions with pkg=nil.
+*/
+func (d *Deserializer) deserializeRuntimeTypeMethods() {
+	visitedTypes := make(map[string]bool) // Use string representation to avoid issues with type identity
+
+	// First, collect all types from package members
+	for _, pkg := range d.prog.AllPackages() {
+		for _, member := range pkg.Members {
+			if t, ok := member.(*ssa.Type); ok {
+				d.exploreTypeRecursively(t.Type(), visitedTypes)
+			}
+		}
+	}
+
+	// Also collect types from all functions' signatures and instructions,
+	// including functions with pkg=nil (like generated/synthetic functions)
+	fns := ssautil.AllFunctions(d.prog)
+	for fn := range fns {
+		d.collectTypesFromFunction(fn, visitedTypes)
+	}
+}
+
+// collectTypesFromFunction extracts types from a function and its instructions
+func (d *Deserializer) collectTypesFromFunction(fn *ssa.Function, visitedTypes map[string]bool) {
+	// Add types from function signature
+	if fn.Signature != nil {
+		if fn.Signature.Params() != nil {
+			for i := 0; i < fn.Signature.Params().Len(); i++ {
+				d.exploreTypeRecursively(fn.Signature.Params().At(i).Type(), visitedTypes)
+			}
+		}
+		if fn.Signature.Results() != nil {
+			for i := 0; i < fn.Signature.Results().Len(); i++ {
+				d.exploreTypeRecursively(fn.Signature.Results().At(i).Type(), visitedTypes)
+			}
+		}
+	}
+
+	// Add types from function body instructions
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			// Add the type of the instruction's result
+			if v, ok := instr.(ssa.Value); ok {
+				d.exploreTypeRecursively(v.Type(), visitedTypes)
+			}
+
+			// Add types from operands
+			var space [8]*ssa.Value
+			for _, op := range instr.Operands(space[:0]) {
+				if *op != nil {
+					d.exploreTypeRecursively((*op).Type(), visitedTypes)
+				}
+			}
+		}
+	}
+}
+
+// exploreTypeRecursively explores a type and all its embedded/field types,
+// adding exported methods for each type encountered
+func (d *Deserializer) exploreTypeRecursively(typ types.Type, visitedTypes map[string]bool) {
+	if typ == nil {
+		return
+	}
+
+	// Use string representation as key to avoid type identity issues
+	typeStr := typ.String()
+	if visitedTypes[typeStr] {
+		return
+	}
+	visitedTypes[typeStr] = true
+
+	// Add exported methods for this type
+	mset := d.prog.MethodSets.MethodSet(typ)
+	for i := 0; i < mset.Len(); i++ {
+		sel := mset.At(i)
+		m := sel.Obj()
+		if m.Exported() {
+			methodValue := d.prog.MethodValue(sel)
+			if methodValue != nil {
+				hash := hashFunction(methodValue)
+				d.functions[hash] = methodValue
+			}
+		}
+	}
+
+	// Now recursively explore embedded types
+	d.exploreEmbeddedTypesRecursively(typ, visitedTypes)
+}
+
+// exploreEmbeddedTypesRecursively recursively explores embedded struct types
+// and container element types
+func (d *Deserializer) exploreEmbeddedTypesRecursively(typ types.Type, visitedTypes map[string]bool) {
+	if typ == nil {
+		return
+	}
+
+	typ = types.Unalias(typ)
+
+	switch t := typ.(type) {
+	case *types.Named:
+		// Explore underlying type of named types
+		d.exploreTypeRecursively(t.Underlying(), visitedTypes)
+
+	case *types.Pointer:
+		// Explore element type of pointers
+		d.exploreTypeRecursively(t.Elem(), visitedTypes)
+
+	case *types.Struct:
+		// For struct types, explore all field types (including embedded types)
+		for i := 0; i < t.NumFields(); i++ {
+			field := t.Field(i)
+			fieldType := field.Type()
+			d.exploreTypeRecursively(fieldType, visitedTypes)
+		}
+
+	case *types.Slice:
+		d.exploreTypeRecursively(t.Elem(), visitedTypes)
+
+	case *types.Array:
+		d.exploreTypeRecursively(t.Elem(), visitedTypes)
+
+	case *types.Map:
+		d.exploreTypeRecursively(t.Key(), visitedTypes)
+		d.exploreTypeRecursively(t.Elem(), visitedTypes)
+
+	case *types.Chan:
+		d.exploreTypeRecursively(t.Elem(), visitedTypes)
+
+	case *types.Signature:
+		// Explore parameter and result types
+		if t.Params() != nil {
+			for i := 0; i < t.Params().Len(); i++ {
+				d.exploreTypeRecursively(t.Params().At(i).Type(), visitedTypes)
+			}
+		}
+		if t.Results() != nil {
+			for i := 0; i < t.Results().Len(); i++ {
+				d.exploreTypeRecursively(t.Results().At(i).Type(), visitedTypes)
+			}
+		}
 	}
 }
 
@@ -57,15 +217,6 @@ func (d *Deserializer) deserializeFunction(f *pb.Function) *ssa.Function {
 
 	if existing, ok := d.functions[f.Hash]; ok {
 		return existing
-	}
-
-	if f.Package == nil {
-		fmt.Printf("%v\n", f.Hash)
-		// Temporary solution
-		tmpSig := types.NewSignature(nil, nil, nil, false)
-		tmp := d.prog.NewFunction(f.Name, tmpSig, "deserializer-bad-code")
-		d.functions[f.Hash] = tmp
-		return tmp
 	}
 
 	pkg, ok := d.packages[f.Package.Path]
@@ -236,69 +387,3 @@ func (d *Deserializer) DeserializeRTAResult(pbRTAResult *pb.RTAResult) *rta.Resu
 }
 
 // === End RTA deserialization ===
-
-func BuildDefinitiveFunctionMap(prog *ssa.Program) map[string]*ssa.Function {
-	lookup := make(map[string]*ssa.Function)
-	queue := make([]*ssa.Function, 0) // A queue for finding nested closures
-
-	// Helper to add a function to the map and queue if it's new
-	add := func(fn *ssa.Function) {
-		if fn == nil {
-			return
-		}
-		// Use fn.String() as the unique, serializable key
-		if _, exists := lookup[hashFunction(fn)]; !exists {
-			lookup[hashFunction(fn)] = fn
-			queue = append(queue, fn) // Add to queue to scan for anon funcs
-		}
-	}
-
-	// Helper to get all methods/thunks for a given type
-	methodsOf := func(T types.Type) {
-		if types.IsInterface(T) {
-			return // Interfaces don't have concrete methods
-		}
-		mset := prog.MethodSets.MethodSet(T)
-		for i := 0; i < mset.Len(); i++ {
-			// This is the public API to get a method/thunk *ssa.Function.
-			// This is what RTA uses and is what populates the
-			// unexported 'objectMethods' cache.
-			add(prog.MethodValue(mset.At(i)))
-		}
-	}
-
-	// === Step 1: Get all package-level functions ===
-	// This finds 'main.main', 'init', 'fmt.Println', etc.
-	for _, pkg := range prog.AllPackages() {
-		if pkg == nil {
-			continue
-		}
-		for _, member := range pkg.Members {
-			if fn, ok := member.(*ssa.Function); ok {
-				add(fn)
-			}
-		}
-	}
-
-	// === Step 2: Get all methods/thunks for Runtime Types ===
-	// This is the CRITICAL step for finding your missing functions.
-	// prog.RuntimeTypes() returns all concrete types (incl. anonymous structs)
-	// that were used in a MakeInterface instruction.
-	for _, T := range prog.RuntimeTypes() {
-		methodsOf(T)                   // Finds methods on T
-		methodsOf(types.NewPointer(T)) // Finds methods on *T
-	}
-
-	// === Step 3: Recursively find all anonymous closures ===
-	// Process the queue, which now contains all functions from steps 1 & 2.
-	// We scan their 'AnonFuncs' field to find all nested closures.
-	for i := 0; i < len(queue); i++ { // Use a queue, not recursion
-		fn := queue[i]
-		for _, anonFn := range fn.AnonFuncs {
-			add(anonFn) // add() handles duplicates and enqueues new funcs
-		}
-	}
-
-	log.Printf("Built definitive map with %d total functions.", len(lookup))
-	return lookup
-}

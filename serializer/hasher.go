@@ -27,6 +27,9 @@ import (
 //		// return fmt.Sprintf("%x", h.Sum64())
 //	}
 func hashFunction(f *ssa.Function) string {
+	if f == nil {
+		return ""
+	}
 	return f.String()
 }
 

@@ -109,3 +109,34 @@ func LoadTestProgram(path string) (*ssa.Program, *ssa.Package, error) {
 
 	return prog, mainPkg, nil
 }
+
+func TestSeparatePrograms(t *testing.T) {
+	// Load the test program
+	_, mainPkg, err := LoadTestProgram("testdata/main.go")
+	if err != nil {
+		t.Fatalf("failed to load test program: %v", err)
+	}
+	new_prog, _, err := LoadTestProgram("testdata/same_main.go")
+	if err != nil {
+		t.Fatalf("failed to load test program: %v", err)
+	}
+
+	mainFn := mainPkg.Func("main")
+	rtaResult := rta.Analyze([]*ssa.Function{mainFn}, true)
+	oldCG := callGraphToDOT(rtaResult.CallGraph)
+	serializer := NewSerializer()
+	pbRTAResult := serializer.SerializeRTAResult(rtaResult)
+
+	deserializer := NewDeserializer(new_prog)
+	res := deserializer.DeserializeRTAResult(pbRTAResult)
+
+	myStr := callGraphToDOT(res.CallGraph)
+
+	// Write both as file
+	os.WriteFile("old_call_graph.dot", []byte(oldCG), 0644)
+	os.WriteFile("new_call_graph.dot", []byte(myStr), 0644)
+
+	if oldCG != myStr {
+		t.Errorf("deserialized call graph does not match original")
+	}
+}
