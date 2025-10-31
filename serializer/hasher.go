@@ -9,23 +9,25 @@ import (
 )
 
 // Hashes an ssa.Function into a string
+//
+//	func hashFunction(f *ssa.Function) string {
+//		// if f == nil {
+//		// 	return ""
+//		// }
+//		// // Hash the function based on name, package, signature, and instructions
+//		// h := fnv.New64a()
+//		// h.Write([]byte(f.Name()))
+//		// if f.Pkg != nil && f.Pkg.Pkg != nil {
+//		// 	h.Write([]byte(f.Pkg.Pkg.Path()))
+//		// }
+//		// h.Write([]byte(f.Signature.String()))
+//		// if f.Object() != nil {
+//		// 	h.Write([]byte(f.Object().Id()))
+//		// }
+//		// return fmt.Sprintf("%x", h.Sum64())
+//	}
 func hashFunction(f *ssa.Function) string {
-	if f == nil {
-		return ""
-	}
-	// Hash the function based on name, package, signature, and instructions
-	h := fnv.New64a()
-	h.Write([]byte(f.Name()))
-	if f.Pkg != nil && f.Pkg.Pkg != nil {
-		h.Write([]byte(f.Pkg.Pkg.Path()))
-	}
-	h.Write([]byte(f.Signature.String()))
-	for _, block := range f.Blocks {
-		for _, instr := range block.Instrs {
-			h.Write([]byte(instr.String()))
-		}
-	}
-	return fmt.Sprintf("%x", h.Sum64())
+	return f.String()
 }
 
 // Hashes an ssa.CallInstruction into a string

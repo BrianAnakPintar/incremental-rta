@@ -47,6 +47,14 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
+type MethodSummary struct {
+	// Functions that contributed to the creation of this method
+	Provenance []*ssa.Function
+
+	// Functions created as a result of this method
+	FunctionsCreated []*ssa.Function
+}
+
 // A Result holds the results of Rapid Type Analysis, which includes the
 // set of reachable functions/methods, runtime types, and the call graph.
 type Result struct {
@@ -110,6 +118,9 @@ type rta struct {
 	// Keys are *types.Interface, values are *interfaceTypeInfo.
 	// Only interfaces used in "invoke"-mode CallInstructions are included.
 	interfaceTypes typeutil.Map
+
+	// Methods maps each method to its summary information.
+	Methods map[*ssa.Function]*MethodSummary
 }
 
 type concreteTypeInfo struct {
@@ -129,6 +140,9 @@ type interfaceTypeInfo struct {
 // addReachable marks a function as potentially callable at run-time,
 // and ensures that it gets processed.
 func (r *rta) addReachable(f *ssa.Function, addrTaken bool) {
+	if f.String() == "(struct{*internal/abi.Type}).Align" {
+		fmt.Println("Let's see how this happens.")
+	}
 	reachable := r.result.Reachable
 	n := len(reachable)
 	v := reachable[f]
@@ -532,8 +546,7 @@ func (r *rta) addRuntimeType(T types.Type, skip bool) {
 		}
 
 	default:
-		// panic(T)
-		panic(fmt.Sprintf("unexpected type in addRuntimeType: %T (%v)", t, t))
+		panic(T)
 	}
 }
 
@@ -592,13 +605,15 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 		// No need to do pruning
 	} else {
 		// We have to prune our stuff
-
 	}
 
 	r := &rta{
 		result: &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
 		prog:   roots[0].Prog,
 	}
+
+	// Refill rta with previous state if any
+	refillRTAState(r, prevRun.State)
 
 	// Assume we always build the call graph for now.
 	r.result.CallGraph = callgraph.New(roots[0])
@@ -642,4 +657,14 @@ func saveRTAState(r *rta) *RTAState {
 		ConcreteTypes:       r.concreteTypes,
 		InterfaceTypes:      r.interfaceTypes,
 	}
+}
+
+func refillRTAState(r *rta, state *RTAState) {
+	r.prog = state.prog
+	r.reflectValueCall = state.ReflectValueCall
+	r.addrTakenFuncsBySig = state.AddrTakenFuncsBySig
+	r.dynCallSites = state.DynCallSites
+	r.invokeSites = state.InvokeSites
+	r.concreteTypes = state.ConcreteTypes
+	r.interfaceTypes = state.InterfaceTypes
 }

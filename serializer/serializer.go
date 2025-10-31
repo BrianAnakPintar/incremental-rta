@@ -1,7 +1,6 @@
 package serializer
 
 import (
-	"fmt"
 	"rta"
 	pb "rta/proto/generated"
 
@@ -35,6 +34,8 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 		return existing
 	}
 
+	var res *pb.Function
+
 	var pkg *pb.Package
 	if f.Pkg != nil && f.Pkg.Pkg != nil {
 		pkg = &pb.Package{
@@ -44,17 +45,21 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 	}
 
 	if f.Pkg == nil || f.Pkg.Pkg == nil {
-		fmt.Printf("Function %s has nil package\n", f.Name())
-		fmt.Printf("%v\n", f)
-		return nil
+		res = &pb.Function{
+			Name:      f.Name(),
+			Package:   pkg,
+			Signature: f.Signature.String(),
+			Hash:      hashFunction(f),
+		}
+		s.functions[f] = res
+		return res
 	}
 
-	res := &pb.Function{
+	res = &pb.Function{
 		Name:      f.Name(),
 		Package:   pkg,
 		Signature: f.Signature.String(),
-
-		Hash: hashFunction(f),
+		Hash:      hashFunction(f),
 	}
 
 	s.functions[f] = res
@@ -73,7 +78,6 @@ func (s *Serializer) serializeCallSite(ci ssa.CallInstruction) *pb.CallSite {
 			it’s expected and comes from compiler/runtime stubs used to implement reflection.
 			Totally normal — you shouldn’t try to “fix” or filter it out unless you’re intentionally
 			pruning runtime internals.
-
 		*/
 		return nil
 	}
@@ -161,7 +165,7 @@ func (s *Serializer) serializeCallGraph(cg *callgraph.Graph) *pb.CallGraph {
 // === End graph serialization ===
 
 // === RTA serialization ===
-func (s *Serializer) serializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
+func (s *Serializer) SerializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
 	pbRTAResult := &pb.RTAResult{
 		CallGraph: s.serializeCallGraph(rtaResult.CallGraph),
 		Reachable: make([]*pb.ReachableEntry, 0, len(rtaResult.Reachable)),
@@ -178,7 +182,7 @@ func (s *Serializer) serializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
 	return pbRTAResult
 }
 
-func (s *Serializer) serializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
+func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 	pbRTAState := &pb.RTAState{
 		ReflectValueCall:    s.serializeFunction(rtaState.ReflectValueCall),
 		AddrTakenFuncsBySig: make(map[string]*pb.ListOfFunctions),

@@ -17,6 +17,7 @@ message ReachableEntry {
 message RTAResult {
     callgraph.CallGraph call_graph = 1;
 
+    // I am tempted to make this a map<string, ReachableEntry> so lookups are faster.
     repeated ReachableEntry reachable = 2;
 
     // TODO(brian) Runtime types, but for now we don't deal with Interfaces

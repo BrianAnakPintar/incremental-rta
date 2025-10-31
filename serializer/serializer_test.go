@@ -63,7 +63,7 @@ func TestSerializeRTA(t *testing.T) {
 	oldCG := callGraphToDOT(rtaResult.CallGraph)
 
 	serializer := NewSerializer()
-	pbRTAResult := serializer.serializeRTAResult(rtaResult)
+	pbRTAResult := serializer.SerializeRTAResult(rtaResult)
 
 	// Now let's try to deserialize it and see if it looks right
 	deserializer := NewDeserializer(prog)
