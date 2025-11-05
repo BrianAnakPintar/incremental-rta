@@ -642,15 +642,14 @@ func (r *rta) summaryAddProvenance(owner *ssa.Function, prov *ssa.Function) {
 // IncrementalAnalyze performs RTA starting from the given roots.
 // If prevRun is nil, it behaves like Analyze but returns the analysis state as well.
 // If prevRun is !nil, it reuses the analysis state and roots would be the changed functions.
+// roots are functions that are entrypoints or have changed since the last analysis.
 
 // NOTE: For now let's assume that it always builds the call graph.
 func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *ResultWithState {
 	// TODO(brian): Consider the case of removing a root. This would require us to prune the CG.
-
 	if prevRun == nil {
-		// No need to do pruning
-	} else {
-		// We have to prune our stuff
+		// TODO(brian): Can do Analyze here in the future. For simplicity, just panic for now.
+		panic("Cannot do incremental analysis without prevRun")
 	}
 
 	r := &rta{
@@ -659,11 +658,7 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 		summary: make(map[*ssa.Function]*MethodSummary, 0),
 	}
 
-	// Refill rta with previous state if any
 	refillRTAState(r, prevRun.State)
-
-	// Assume we always build the call graph for now.
-	r.result.CallGraph = callgraph.New(roots[0])
 
 	// Grab ssa.Function for (*reflect.Value).Call,
 	// if "reflect" is among the dependencies.
@@ -673,6 +668,7 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 	}
 
 	for _, root := range roots {
+		r.removeOutgoingEdges(root)
 		r.addReachable(root, false)
 	}
 
@@ -703,6 +699,7 @@ func saveRTAState(r *rta) *RTAState {
 		InvokeSites:         r.invokeSites,
 		ConcreteTypes:       r.concreteTypes,
 		InterfaceTypes:      r.interfaceTypes,
+		Summary:             r.summary,
 	}
 }
 
@@ -714,4 +711,46 @@ func refillRTAState(r *rta, state *RTAState) {
 	r.invokeSites = state.InvokeSites
 	r.concreteTypes = state.ConcreteTypes
 	r.interfaceTypes = state.InterfaceTypes
+	r.summary = state.Summary
+}
+
+func (r *rta) removeOutgoingEdges(f *ssa.Function) {
+	cg := r.result.CallGraph
+	if cg == nil {
+		panic("No graph in rta, we require a graph to be built for now.")
+	}
+
+	nd := cg.Nodes[f]
+	if nd == nil {
+		// No outgoing edges to remove
+		return
+	}
+
+	outEdges := nd.Out
+	for _, outEdge := range outEdges {
+		outNode := outEdge.Callee
+		filterOutNodeFromIncomingEdges(outNode, nd)
+		delete(r.result.Reachable, outNode.Func) // Remove from reachable set
+	}
+	nd.Out = nil
+
+	removeBasedOnProvenance()
+	cg.Nodes[f] = nd
+}
+
+// super verbose name? TODO: ask AI to find better name.
+func filterOutNodeFromIncomingEdges(outNode *callgraph.Node, ndToRemove *callgraph.Node) {
+	// Remove incoming edge from outNode
+	newIn := outNode.In[:0]
+	for _, inEdge := range outNode.In {
+		if inEdge.Caller == ndToRemove {
+			continue
+		}
+		newIn = append(newIn, inEdge)
+	}
+	outNode.In = newIn
+}
+
+func removeBasedOnProvenance() {
+	// TODO(brian): Implement removing based on provenance.
 }
