@@ -47,7 +47,7 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 	if f.Pkg == nil || f.Pkg.Pkg == nil {
 		res = &pb.Function{
 			Name:      f.Name(),
-			Package:   pkg,
+			Package:   &pb.Package{Name: "unknown", Path: "unknown"}, // TODO: leave for now
 			Signature: f.Signature.String(),
 			Hash:      hashFunction(f),
 		}
@@ -209,7 +209,37 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		pbRTAState.DynCallSites[sig.String()] = &pb.ListOfCallSites{CallSites: pbSites}
 	}
 
+	for fn, summary := range rtaState.Summary {
+		if pbRTAState.Summary == nil {
+			pbRTAState.Summary = make(map[string]*pb.MethodSummary)
+		}
+		pbRTAState.Summary[hashFunction(fn)] = s.SerializeRTAMethodSummaries(map[*ssa.Function]*rta.MethodSummary{fn: summary})[hashFunction(fn)]
+	}
+
 	return pbRTAState
+}
+
+func (s *Serializer) SerializeRTAMethodSummaries(summaries map[*ssa.Function]*rta.MethodSummary) map[string]*pb.MethodSummary {
+	pbSummaries := make(map[string]*pb.MethodSummary)
+
+	for fn, summary := range summaries {
+		pbProvenance := make([]*pb.Function, 0, len(summary.Provenance))
+		for _, provFn := range summary.Provenance {
+			pbProvenance = append(pbProvenance, s.serializeFunction(provFn))
+		}
+
+		pbFuncsCreated := make([]*pb.Function, 0, len(summary.FunctionsCreated))
+		for _, createdFn := range summary.FunctionsCreated {
+			pbFuncsCreated = append(pbFuncsCreated, s.serializeFunction(createdFn))
+		}
+
+		pbSummaries[hashFunction(fn)] = &pb.MethodSummary{
+			Provenance:       pbProvenance,
+			FunctionsCreated: pbFuncsCreated,
+		}
+	}
+
+	return pbSummaries
 }
 
 // === End RTA serialization ===

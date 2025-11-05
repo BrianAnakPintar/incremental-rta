@@ -9,28 +9,30 @@ import (
 )
 
 // Hashes an ssa.Function into a string
-//
-//	func hashFunction(f *ssa.Function) string {
-//		// if f == nil {
-//		// 	return ""
-//		// }
-//		// // Hash the function based on name, package, signature, and instructions
-//		// h := fnv.New64a()
-//		// h.Write([]byte(f.Name()))
-//		// if f.Pkg != nil && f.Pkg.Pkg != nil {
-//		// 	h.Write([]byte(f.Pkg.Pkg.Path()))
-//		// }
-//		// h.Write([]byte(f.Signature.String()))
-//		// if f.Object() != nil {
-//		// 	h.Write([]byte(f.Object().Id()))
-//		// }
-//		// return fmt.Sprintf("%x", h.Sum64())
-//	}
 func hashFunction(f *ssa.Function) string {
 	if f == nil {
 		return ""
 	}
-	return f.String()
+
+	h := fnv.New64a()
+
+	// Hash function identity
+	h.Write([]byte(f.String()))
+
+	// Hash function signature
+	if f.Signature != nil {
+		h.Write([]byte(f.Signature.String()))
+	}
+
+	// Hash function body (instructions)
+	for _, block := range f.Blocks {
+		h.Write([]byte(fmt.Sprintf("block:%d", block.Index)))
+		for _, instr := range block.Instrs {
+			h.Write([]byte(instr.String()))
+		}
+	}
+
+	return fmt.Sprintf("%x", h.Sum64())
 }
 
 // Hashes an ssa.CallInstruction into a string
@@ -48,3 +50,13 @@ func hashCallSite(ci ssa.CallInstruction) string {
 	h.Write([]byte(ci.Common().Signature().String()))
 	return fmt.Sprintf("%x", h.Sum64())
 }
+
+// This is just a fun function that seems useful to get the Type from a string
+// func parseTypeString(typeStr string, prog *ssa.Program) types.Type {
+// 	// Parse the type expression
+// 	tv, err := types.Eval(token.NewFileSet(), prog.Package(prog.ImportedPackage("builtin").Pkg).Pkg, token.NoPos, typeStr)
+// 	if err != nil {
+// 		return nil
+// 	}
+// 	return tv.Type
+// }

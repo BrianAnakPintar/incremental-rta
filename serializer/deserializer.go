@@ -62,33 +62,6 @@ func (d *Deserializer) deserializeAllFunctions() {
 
 }
 
-/*
-deserializeRuntimeTypeMethods adds method values for all runtime types that may be
-called via reflection. This handles exported methods of runtime types that are
-created via prog.MethodValue() but not included in ssautil.AllFunctions.
-This includes types from package members and types discovered in function signatures
-and instructions, including those from functions with pkg=nil.
-*/
-func (d *Deserializer) deserializeRuntimeTypeMethods() {
-	visitedTypes := make(map[string]bool) // Use string representation to avoid issues with type identity
-
-	// First, collect all types from package members
-	for _, pkg := range d.prog.AllPackages() {
-		for _, member := range pkg.Members {
-			if t, ok := member.(*ssa.Type); ok {
-				d.exploreTypeRecursively(t.Type(), visitedTypes)
-			}
-		}
-	}
-
-	// Also collect types from all functions' signatures and instructions,
-	// including functions with pkg=nil (like generated/synthetic functions)
-	fns := ssautil.AllFunctions(d.prog)
-	for fn := range fns {
-		d.collectTypesFromFunction(fn, visitedTypes)
-	}
-}
-
 // collectTypesFromFunction extracts types from a function and its instructions
 func (d *Deserializer) collectTypesFromFunction(fn *ssa.Function, visitedTypes map[string]bool) {
 	// Add types from function signature
@@ -219,6 +192,7 @@ func (d *Deserializer) deserializeFunction(f *pb.Function) *ssa.Function {
 		return existing
 	}
 
+	var pkg *ssa.Package
 	pkg, ok := d.packages[f.Package.Path]
 	if !ok {
 		pkg = d.prog.Package(d.prog.ImportedPackage(f.Package.Path).Pkg)
@@ -384,6 +358,101 @@ func (d *Deserializer) DeserializeRTAResult(pbRTAResult *pb.RTAResult) *rta.Resu
 		CallGraph: cg,
 		Reachable: reachable,
 	}
+}
+
+func (d *Deserializer) DeserializeRTAState(pbRTAState *pb.RTAState) *rta.RTAState {
+	if pbRTAState == nil {
+		return nil
+	}
+
+	rtaState := &rta.RTAState{
+		Summary: make(map[*ssa.Function]*rta.MethodSummary),
+	}
+
+	if pbRTAState.ReflectValueCall != nil {
+		rtaState.ReflectValueCall = d.deserializeFunction(pbRTAState.ReflectValueCall)
+	}
+
+	// Deserialize AddrTakenFuncsBySig
+	// The serializer stores the signature as a string, but we need to reconstruct
+	// the types.Type key and store map[*ssa.Function]bool as the value
+	for _, pbListOfFuncs := range pbRTAState.AddrTakenFuncsBySig {
+		funcMap := make(map[*ssa.Function]bool)
+		var sigType types.Type
+
+		for _, pbFn := range pbListOfFuncs.Functions {
+			fn := d.deserializeFunction(pbFn)
+			if fn != nil {
+				funcMap[fn] = true
+				// Use the signature from the first valid function
+				if sigType == nil && fn.Signature != nil {
+					sigType = fn.Signature
+				}
+			}
+		}
+
+		// Only add if we found a valid signature type
+		if sigType != nil && len(funcMap) > 0 {
+			rtaState.AddrTakenFuncsBySig.Set(sigType, funcMap)
+		}
+	}
+
+	// Deserialize DynCallSites
+	// Similar approach: reconstruct types.Type from the signature string
+	for _, pbListOfCallSites := range pbRTAState.DynCallSites {
+		callSites := make([]ssa.CallInstruction, 0, len(pbListOfCallSites.CallSites))
+		var sigType types.Type
+
+		for _, pbCS := range pbListOfCallSites.CallSites {
+			cs := d.deserializeCallSite(pbCS)
+			if cs != nil {
+				callSites = append(callSites, cs)
+				// Use the signature from the first valid call site
+				if sigType == nil && cs.Common().Signature() != nil {
+					sigType = cs.Common().Signature()
+				}
+			}
+		}
+
+		// Only add if we found a valid signature type
+		if sigType != nil && len(callSites) > 0 {
+			rtaState.DynCallSites.Set(sigType, callSites)
+		}
+	}
+
+	// Deserialize method summaries
+	if pbRTAState.Summary != nil {
+		for fnHash, pbSummary := range pbRTAState.Summary {
+			fn := d.functions[fnHash]
+			if fn == nil {
+				continue
+			}
+			summary := &rta.MethodSummary{
+				Provenance:       make([]*ssa.Function, 0, len(pbSummary.Provenance)),
+				FunctionsCreated: make([]*ssa.Function, 0, len(pbSummary.FunctionsCreated)),
+			}
+
+			// Deserialize provenance
+			for _, pbProvFn := range pbSummary.Provenance {
+				provFn := d.deserializeFunction(pbProvFn)
+				if provFn != nil {
+					summary.Provenance = append(summary.Provenance, provFn)
+				}
+			}
+
+			// Deserialize functions created
+			for _, pbCreatedFn := range pbSummary.FunctionsCreated {
+				createdFn := d.deserializeFunction(pbCreatedFn)
+				if createdFn != nil {
+					summary.FunctionsCreated = append(summary.FunctionsCreated, createdFn)
+				}
+			}
+
+			rtaState.Summary[fn] = summary
+		}
+	}
+
+	return rtaState
 }
 
 // === End RTA deserialization ===

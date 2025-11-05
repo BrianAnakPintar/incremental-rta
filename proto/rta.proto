@@ -31,10 +31,16 @@ message ListOfCallSites {
     repeated ssa.CallSite call_sites = 1;
 }
 
+message MethodSummary {
+    repeated ssa.Function provenance = 1;
+    repeated ssa.Function functions_created = 2;
+}
+
 message RTAState {
     ssa.Function reflect_value_call = 1;
     map<string, ListOfFunctions> addr_taken_funcs_by_sig = 2;
     map<string, ListOfCallSites> dyn_call_sites = 3;
+    map<string, MethodSummary> summary = 4;
 
     // TODO: Invoke site, ConcreteType, InterfaceType
 }

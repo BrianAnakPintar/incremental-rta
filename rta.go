@@ -120,7 +120,7 @@ type rta struct {
 	interfaceTypes typeutil.Map
 
 	// Methods maps each method to its summary information.
-	Methods map[*ssa.Function]*MethodSummary
+	summary map[*ssa.Function]*MethodSummary
 }
 
 type concreteTypeInfo struct {
@@ -140,9 +140,6 @@ type interfaceTypeInfo struct {
 // addReachable marks a function as potentially callable at run-time,
 // and ensures that it gets processed.
 func (r *rta) addReachable(f *ssa.Function, addrTaken bool) {
-	if f.String() == "(struct{*internal/abi.Type}).Align" {
-		fmt.Println("Let's see how this happens.")
-	}
 	reachable := r.result.Reachable
 	n := len(reachable)
 	v := reachable[f]
@@ -295,12 +292,15 @@ func (r *rta) visitFunc(f *ssa.Function) {
 				// interface materializes its runtime
 				// type, allowing any of its exported
 				// methods to be called though reflection.
+				r.summaryAddRuntimeType(f, instr.X.Type())
 				r.addRuntimeType(instr.X.Type(), false)
 			}
 
 			// Process all address-taken functions.
 			for _, op := range rands {
 				if g, ok := (*op).(*ssa.Function); ok {
+					r.summaryAddFunctionCreated(f, g)
+					r.summaryAddProvenance(g, f)
 					r.visitAddrTakenFunc(g)
 				}
 			}
@@ -325,8 +325,9 @@ func Analyze(roots []*ssa.Function, buildCallGraph bool) *Result {
 	}
 
 	r := &rta{
-		result: &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
-		prog:   roots[0].Prog,
+		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
+		prog:    roots[0].Prog,
+		summary: make(map[*ssa.Function]*MethodSummary),
 	}
 
 	if buildCallGraph {
@@ -586,11 +587,56 @@ type RTAState struct {
 	InvokeSites         typeutil.Map
 	ConcreteTypes       typeutil.Map
 	InterfaceTypes      typeutil.Map
+
+	Summary map[*ssa.Function]*MethodSummary
 }
 
 type ResultWithState struct {
 	Result *Result
 	State  *RTAState
+}
+
+func (r *rta) summaryAddRuntimeType(creator *ssa.Function, T types.Type) {
+	if _, ok := r.summary[creator]; !ok {
+		r.summary[creator] = &MethodSummary{
+			Provenance:       make([]*ssa.Function, 0),
+			FunctionsCreated: make([]*ssa.Function, 0),
+		}
+	}
+
+	// Add a provenance for every function in T's method set.
+	mset := r.prog.MethodSets.MethodSet(T)
+	for i := 0; i < mset.Len(); i++ {
+		sel := mset.At(i)
+		m := r.prog.MethodValue(sel)
+
+		if _, ok := r.summary[m]; !ok {
+			r.summary[m] = &MethodSummary{
+				Provenance:       make([]*ssa.Function, 0),
+				FunctionsCreated: make([]*ssa.Function, 0),
+			}
+		}
+
+		r.summary[creator].FunctionsCreated = append(r.summary[creator].Provenance, m)
+		r.summary[m].Provenance = append(r.summary[m].FunctionsCreated, creator)
+	}
+}
+
+func (r *rta) summaryAddFunctionCreated(owner *ssa.Function, created *ssa.Function) {
+	if _, ok := r.summary[owner]; !ok {
+		r.summary[owner] = &MethodSummary{
+			Provenance:       make([]*ssa.Function, 0),
+			FunctionsCreated: make([]*ssa.Function, 0),
+		}
+	}
+	r.summary[owner].FunctionsCreated = append(r.summary[owner].FunctionsCreated, created)
+}
+
+func (r *rta) summaryAddProvenance(owner *ssa.Function, prov *ssa.Function) {
+	if _, ok := r.summary[owner]; !ok {
+		r.summary[owner] = &MethodSummary{}
+	}
+	r.summary[owner].Provenance = append(r.summary[owner].Provenance, prov)
 }
 
 // IncrementalAnalyze performs RTA starting from the given roots.
@@ -608,8 +654,9 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 	}
 
 	r := &rta{
-		result: &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
-		prog:   roots[0].Prog,
+		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
+		prog:    roots[0].Prog,
+		summary: make(map[*ssa.Function]*MethodSummary, 0),
 	}
 
 	// Refill rta with previous state if any
