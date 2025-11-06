@@ -140,3 +140,24 @@ func TestSeparatePrograms(t *testing.T) {
 		t.Errorf("deserialized call graph does not match original")
 	}
 }
+
+func TestHashFunction(t *testing.T) {
+	// Load the test program
+	_, mainPkg, err := LoadTestProgram("testdata/main.go")
+	if err != nil {
+		t.Fatalf("failed to load test program: %v", err)
+	}
+
+	_, mainPkg2, err := LoadTestProgram("testdata/same_main.go")
+	if err != nil {
+		t.Fatalf("failed to load test program: %v", err)
+	}
+
+	mainFn := mainPkg.Func("main")
+	mainFn2 := mainPkg2.Func("main")
+	hash1 := hashFunction(mainFn)
+	hash2 := hashFunction(mainFn2)
+
+	t.Logf("Hash 1: %s", hash1)
+	t.Logf("Hash 2: %s", hash2)
+}

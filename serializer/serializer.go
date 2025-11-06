@@ -184,9 +184,13 @@ func (s *Serializer) SerializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
 
 func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 	pbRTAState := &pb.RTAState{
-		ReflectValueCall:    s.serializeFunction(rtaState.ReflectValueCall),
 		AddrTakenFuncsBySig: make(map[string]*pb.ListOfFunctions),
 		DynCallSites:        make(map[string]*pb.ListOfCallSites),
+	}
+
+	// Only serialize ReflectValueCall if it's not nil
+	if rtaState.ReflectValueCall != nil {
+		pbRTAState.ReflectValueCall = s.serializeFunction(rtaState.ReflectValueCall)
 	}
 
 	for _, sig := range rtaState.AddrTakenFuncsBySig.Keys() {

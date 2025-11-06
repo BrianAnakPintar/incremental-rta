@@ -369,6 +369,60 @@ func Analyze(roots []*ssa.Function, buildCallGraph bool) *Result {
 	return r.result
 }
 
+// AnalyzeAndSaveState performs Rapid Type Analysis and returns both the result
+// and the internal state needed for incremental analysis.
+// This is a convenience wrapper around Analyze that prepares state for IncrementalAnalyze.
+func AnalyzeAndSaveState(roots []*ssa.Function, buildCallGraph bool) *ResultWithState {
+	if len(roots) == 0 {
+		return nil
+	}
+
+	r := &rta{
+		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
+		prog:    roots[0].Prog,
+		summary: make(map[*ssa.Function]*MethodSummary),
+	}
+
+	if buildCallGraph {
+		r.result.CallGraph = callgraph.New(roots[0])
+	}
+
+	// Grab ssa.Function for (*reflect.Value).Call,
+	// if "reflect" is among the dependencies.
+	if reflectPkg := r.prog.ImportedPackage("reflect"); reflectPkg != nil {
+		reflectValue := reflectPkg.Members["Value"].(*ssa.Type)
+		r.reflectValueCall = r.prog.LookupMethod(reflectValue.Object().Type(), reflectPkg.Pkg, "Call")
+	}
+
+	hasher := typeutil.MakeHasher()
+	r.result.RuntimeTypes.SetHasher(hasher)
+	r.addrTakenFuncsBySig.SetHasher(hasher)
+	r.dynCallSites.SetHasher(hasher)
+	r.invokeSites.SetHasher(hasher)
+	r.concreteTypes.SetHasher(hasher)
+	r.interfaceTypes.SetHasher(hasher)
+
+	for _, root := range roots {
+		r.addReachable(root, false)
+	}
+
+	// Visit functions, processing their instructions, and adding
+	// new functions to the worklist, until a fixed point is
+	// reached.
+	var shadow []*ssa.Function // for efficiency, we double-buffer the worklist
+	for len(r.worklist) > 0 {
+		shadow, r.worklist = r.worklist, shadow[:0]
+		for _, f := range shadow {
+			r.visitFunc(f)
+		}
+	}
+
+	return &ResultWithState{
+		Result: r.result,
+		State:  saveRTAState(r),
+	}
+}
+
 // interfaces(C) returns all currently known interfaces implemented by C.
 func (r *rta) interfaces(C types.Type) []*types.Interface {
 	// Create an info for C the first time we see it.
@@ -579,7 +633,6 @@ func implements(cinfo *concreteTypeInfo, iinfo *interfaceTypeInfo) (got bool) {
 
 // Contains the state needed to perform incremental RTA.
 type RTAState struct {
-	prog             *ssa.Program
 	ReflectValueCall *ssa.Function
 
 	AddrTakenFuncsBySig typeutil.Map
@@ -617,8 +670,10 @@ func (r *rta) summaryAddRuntimeType(creator *ssa.Function, T types.Type) {
 			}
 		}
 
-		r.summary[creator].FunctionsCreated = append(r.summary[creator].Provenance, m)
-		r.summary[m].Provenance = append(r.summary[m].FunctionsCreated, creator)
+		// creator created m, so add m to creator's FunctionsCreated
+		r.summary[creator].FunctionsCreated = append(r.summary[creator].FunctionsCreated, m)
+		// m was created by creator, so add creator to m's Provenance
+		r.summary[m].Provenance = append(r.summary[m].Provenance, creator)
 	}
 }
 
@@ -634,7 +689,10 @@ func (r *rta) summaryAddFunctionCreated(owner *ssa.Function, created *ssa.Functi
 
 func (r *rta) summaryAddProvenance(owner *ssa.Function, prov *ssa.Function) {
 	if _, ok := r.summary[owner]; !ok {
-		r.summary[owner] = &MethodSummary{}
+		r.summary[owner] = &MethodSummary{
+			Provenance:       make([]*ssa.Function, 0),
+			FunctionsCreated: make([]*ssa.Function, 0),
+		}
 	}
 	r.summary[owner].Provenance = append(r.summary[owner].Provenance, prov)
 }
@@ -648,17 +706,28 @@ func (r *rta) summaryAddProvenance(owner *ssa.Function, prov *ssa.Function) {
 func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *ResultWithState {
 	// TODO(brian): Consider the case of removing a root. This would require us to prune the CG.
 	if prevRun == nil {
-		// TODO(brian): Can do Analyze here in the future. For simplicity, just panic for now.
 		panic("Cannot do incremental analysis without prevRun")
 	}
 
-	r := &rta{
-		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
-		prog:    roots[0].Prog,
-		summary: make(map[*ssa.Function]*MethodSummary, 0),
+	if len(roots) == 0 {
+		return prevRun
 	}
 
+	r := &rta{
+		result:  prevRun.Result,
+		prog:    roots[0].Prog,
+		summary: prevRun.State.Summary,
+	}
+
+	if r.result.CallGraph == nil {
+		r.result.CallGraph = callgraph.New(roots[0])
+	}
+
+	// Refill the RTA state from previous run
 	refillRTAState(r, prevRun.State)
+
+	// Collect functions that may become unreachable after removing edges
+	potentialFuncs := make([]*ssa.Function, 0)
 
 	// Grab ssa.Function for (*reflect.Value).Call,
 	// if "reflect" is among the dependencies.
@@ -667,14 +736,21 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 		r.reflectValueCall = r.prog.LookupMethod(reflectValue.Object().Type(), reflectPkg.Pkg, "Call")
 	}
 
+	// For each changed function, remove its outgoing edges and re-analyze
 	for _, root := range roots {
+		// Collect potential functions before removing edges
+		if node := r.result.CallGraph.Nodes[root]; node != nil {
+			for _, edge := range node.Out {
+				potentialFuncs = append(potentialFuncs, edge.Callee.Func)
+			}
+		}
 		r.removeOutgoingEdges(root)
-		r.addReachable(root, false)
+		// Force the changed function onto the worklist for re-analysis
+		// even if it's already in the Reachable set
+		r.worklist = append(r.worklist, root)
 	}
 
-	// Visit functions, processing their instructions, and adding
-	// new functions to the worklist, until a fixed point is
-	// reached.
+	// Process the worklist
 	var shadow []*ssa.Function // for efficiency, we double-buffer the worklist
 	for len(r.worklist) > 0 {
 		shadow, r.worklist = r.worklist, shadow[:0]
@@ -682,6 +758,9 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 			r.visitFunc(f)
 		}
 	}
+
+	// Prune functions that are no longer reachable
+	r.pruneIfUnreachable(potentialFuncs)
 
 	res := &ResultWithState{
 		Result: r.result,
@@ -692,7 +771,6 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 
 func saveRTAState(r *rta) *RTAState {
 	return &RTAState{
-		prog:                r.prog,
 		ReflectValueCall:    r.reflectValueCall,
 		AddrTakenFuncsBySig: r.addrTakenFuncsBySig,
 		DynCallSites:        r.dynCallSites,
@@ -704,7 +782,6 @@ func saveRTAState(r *rta) *RTAState {
 }
 
 func refillRTAState(r *rta, state *RTAState) {
-	r.prog = state.prog
 	r.reflectValueCall = state.ReflectValueCall
 	r.addrTakenFuncsBySig = state.AddrTakenFuncsBySig
 	r.dynCallSites = state.DynCallSites
@@ -726,11 +803,13 @@ func (r *rta) removeOutgoingEdges(f *ssa.Function) {
 		return
 	}
 
+	// Remove all outgoing edges and update incoming edges of callees
 	outEdges := nd.Out
 	for _, outEdge := range outEdges {
 		outNode := outEdge.Callee
 		filterOutNodeFromIncomingEdges(outNode, nd)
-		delete(r.result.Reachable, outNode.Func) // Remove from reachable set
+		// Don't delete from Reachable yet - let pruning handle it
+		// since the function might still be reachable from other paths
 	}
 	nd.Out = nil
 
@@ -753,4 +832,41 @@ func filterOutNodeFromIncomingEdges(outNode *callgraph.Node, ndToRemove *callgra
 
 func removeBasedOnProvenance() {
 	// TODO(brian): Implement removing based on provenance.
+}
+
+func (r *rta) pruneIfUnreachable(funcs []*ssa.Function) {
+	// TODO(brian): Implement pruning unreachable functions.
+	for _, f := range funcs {
+		nd := r.result.CallGraph.Nodes[f]
+		if nd == nil {
+			continue
+		}
+
+		// If no incoming edges, remove from reachable set.
+		if len(nd.In) == 0 {
+			r.pruneUnreachable(f, make(map[*ssa.Function]bool))
+		}
+	}
+}
+
+// Simple DFS
+func (r *rta) pruneUnreachable(f *ssa.Function, visited map[*ssa.Function]bool) {
+	if visited[f] {
+		return
+	}
+	visited[f] = true
+
+	nd := r.result.CallGraph.Nodes[f]
+	neighbors := nd.Out
+
+	if len(nd.In) == 0 {
+		delete(r.result.Reachable, f)
+		r.result.CallGraph.DeleteNode(nd)
+	} else {
+		return
+	}
+
+	for _, edge := range neighbors {
+		r.pruneUnreachable(edge.Callee.Func, visited)
+	}
 }

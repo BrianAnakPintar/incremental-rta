@@ -19,11 +19,6 @@ func hashFunction(f *ssa.Function) string {
 	// Hash function identity
 	h.Write([]byte(f.String()))
 
-	// Hash function signature
-	if f.Signature != nil {
-		h.Write([]byte(f.Signature.String()))
-	}
-
 	// Hash function body (instructions)
 	for _, block := range f.Blocks {
 		h.Write([]byte(fmt.Sprintf("block:%d", block.Index)))

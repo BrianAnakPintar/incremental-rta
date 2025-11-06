@@ -1,0 +1,4 @@
+digraph {
+  "command-line-arguments.main" -> "command-line-arguments.bar";
+  "command-line-arguments.main" -> "command-line-arguments.foo";
+}
