@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"go/types"
 	"hash/crc32"
+	"strings"
 
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
@@ -750,6 +751,19 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 			}
 		}
 		r.removeOutgoingEdges(root)
+		summary := r.summary[root]
+		if summary == nil {
+			delete(r.result.Reachable, root)
+			r.addReachable(root, false)
+			continue
+		}
+
+		funcsCreated := summary.FunctionsCreated
+		for _, fn := range funcsCreated {
+			r.removeBasedOnProvenance(root, fn)
+			potentialFuncs = append(potentialFuncs, fn)
+		}
+
 		delete(r.result.Reachable, root)
 		r.addReachable(root, false)
 	}
@@ -817,7 +831,6 @@ func (r *rta) removeOutgoingEdges(f *ssa.Function) {
 	}
 	nd.Out = nil
 
-	r.removeBasedOnProvenance(f)
 	cg.Nodes[f] = nd
 }
 
@@ -834,42 +847,54 @@ func filterOutNodeFromIncomingEdges(outNode *callgraph.Node, ndToRemove *callgra
 	outNode.In = newIn
 }
 
-func (r *rta) removeBasedOnProvenance(f *ssa.Function) {
-	// Go through the functions created by f and remove f from their provenance
-	// If any of those functions have no more provenance, remove them as well
-
-	summary, ok := r.summary[f]
+// prov is a function that contributed to the creation of fn.
+// If all provenance functions of fn are no longer reachable, remove fn as well.
+func (r *rta) removeBasedOnProvenance(prov *ssa.Function, fn *ssa.Function) {
+	// remove prov from fn's provenance
+	summary, ok := r.summary[fn]
 	if !ok {
 		return
 	}
 
-	for _, created := range summary.FunctionsCreated {
-		if createdSummary, ok := r.summary[created]; ok {
-			// Remove f from created's Provenance
-			newProv := make([]*ssa.Function, 0, len(createdSummary.Provenance))
-			for _, p := range createdSummary.Provenance {
-				if p != f {
-					newProv = append(newProv, p)
-				}
-			}
-			createdSummary.Provenance = newProv
+	// Remove prov from provenance
+	newProvenance := make([]*ssa.Function, 0)
+	for _, p := range summary.Provenance {
+		if p != prov {
+			newProvenance = append(newProvenance, p)
+		}
+	}
+	summary.Provenance = newProvenance
+	r.summary[fn] = summary
 
-			if len(newProv) == 0 {
-				// Recursively remove created and its dependencies
-				r.removeBasedOnProvenance(created)
-				delete(r.summary, created)
-				delete(r.result.Reachable, created)
-				if cg := r.result.CallGraph; cg != nil {
-					if node := cg.Nodes[created]; node != nil {
-						cg.DeleteNode(node)
-					}
-				}
+	// If provenance is now empty, remove all dynamic in edges to fn
+	if len(summary.Provenance) == 0 {
+		cg := r.result.CallGraph
+		if cg == nil {
+			panic("No graph in rta, we require a graph to be built for now.")
+		}
+
+		nd := cg.Nodes[fn]
+		if nd == nil {
+			return
+		}
+
+		// Remove all incoming edges and update outgoing edges of callers
+		inEdges := nd.In
+		for _, edge := range inEdges {
+			if strings.Contains(edge.Description(), "dynamic") {
+				removeOutEdge(edge)
+				removeInEdge(edge)
 			}
+		}
+		nd.In = nil
+		cg.Nodes[fn] = nd
+
+		if len(nd.In) == 0 {
+			// No incoming edges, remove from reachable set
+			delete(r.result.Reachable, fn)
 		}
 	}
 
-	// Delete the summary for f after processing
-	delete(r.summary, f)
 }
 
 func (r *rta) pruneIfUnreachable(funcs []*ssa.Function) {

@@ -19,6 +19,7 @@ type Deserializer struct {
 	functions map[string]*ssa.Function       // We will use function hash as key
 	callSites map[string]ssa.CallInstruction // We will use call site hash as key
 	nodes     map[string]*callgraph.Node
+	edges     map[string]*callgraph.Edge
 
 	Diff *Diff
 }
@@ -39,6 +40,7 @@ func NewDeserializer(prog *ssa.Program) *Deserializer {
 		functions: make(map[string]*ssa.Function),
 		callSites: make(map[string]ssa.CallInstruction),
 		nodes:     make(map[string]*callgraph.Node),
+		edges:     make(map[string]*callgraph.Edge),
 		Diff: &Diff{
 			ModifiedFunctions: make([]*ssa.Function, 0),
 			RemovedFunctions:  make([]*pb.Function, 0),
@@ -257,9 +259,10 @@ func (d *Deserializer) deserializeCallSite(cs *pb.CallSite) ssa.CallInstruction 
 // === Callgraph deserialization ===
 
 func (d *Deserializer) deserializeEdge(e *pb.Edge) *callgraph.Edge {
-	if e == nil {
+	if e == nil || e.Caller == nil || e.Callee == nil {
 		return nil
 	}
+
 	site := d.deserializeCallSite(e.Site)
 
 	// Get the callgraph nodes
@@ -274,7 +277,18 @@ func (d *Deserializer) deserializeEdge(e *pb.Edge) *callgraph.Edge {
 		return nil
 	}
 
-	return &callgraph.Edge{Caller: callerNd, Callee: calleeNd, Site: site}
+	siteHash := ""
+	if e.Site != nil {
+		siteHash = e.Site.Hash
+	}
+	key := fmt.Sprintf("%s-%s-%s", e.Caller.Hash, siteHash, e.Callee.Hash)
+	if existing, ok := d.edges[key]; ok {
+		return existing
+	}
+
+	edge := &callgraph.Edge{Caller: callerNd, Callee: calleeNd, Site: site}
+	d.edges[key] = edge
+	return edge
 }
 
 func (d *Deserializer) deserializeNodeOnly(n *pb.Node) *callgraph.Node {
