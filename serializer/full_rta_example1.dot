@@ -1,5 +1,0 @@
-digraph {
-  "command-line-arguments.foo" -> "command-line-arguments.achoo";
-  "command-line-arguments.main" -> "command-line-arguments.bar";
-  "command-line-arguments.main" -> "command-line-arguments.foo";
-}

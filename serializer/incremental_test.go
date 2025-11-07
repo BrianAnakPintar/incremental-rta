@@ -16,7 +16,7 @@ func TestIncrementalRTA(t *testing.T) {
 		srcAfter  string
 	}{
 		{
-			name:      "example1",
+			name:      "basic_test",
 			srcBefore: "../tests/simple/before.go",
 			srcAfter:  "../tests/simple/after.go",
 		},
@@ -94,14 +94,10 @@ func TestIncrementalRTA(t *testing.T) {
 			afterFullDOT := callGraphToDOT(resultAfterFull.CallGraph)
 			t.Logf("After (full RTA) call graph:\n%s", afterFullDOT)
 
-			// Find changed function: foo (calls achoo instead of baz)
-			fooFuncAfter := mainPkgAfter.Func("foo")
-			if fooFuncAfter == nil {
-				t.Fatal("foo function not found in after program")
-			}
+			diffs := deser.Diff
 
 			// Run incremental RTA with the changed function
-			resultAfterIncremental := rta.IncrementalAnalyze([]*ssa.Function{fooFuncAfter}, beforeStateInAfterContext)
+			resultAfterIncremental := rta.IncrementalAnalyze(diffs.ModifiedFunctions, beforeStateInAfterContext)
 			if resultAfterIncremental == nil {
 				t.Fatal("incremental RTA analysis returned nil")
 			}
@@ -121,6 +117,18 @@ func TestIncrementalRTA(t *testing.T) {
 				os.WriteFile(fmt.Sprintf("incremental_rta_%s.dot", tt.name), []byte(afterIncrementalDOT), 0644)
 				t.Errorf("Call graphs don't match!\nFull RTA:\n%s\nIncremental RTA:\n%s",
 					afterFullDOT, afterIncrementalDOT)
+			}
+
+			// Ensure reachable functions match
+			if len(resultAfterFull.Reachable) != len(resultAfterIncremental.Result.Reachable) {
+				t.Errorf("Number of reachable functions don't match! Full RTA: %d, Incremental RTA: %d",
+					len(resultAfterFull.Reachable), len(resultAfterIncremental.Result.Reachable))
+			}
+
+			for fn := range resultAfterFull.Reachable {
+				if _, ok := resultAfterIncremental.Result.Reachable[fn]; !ok {
+					t.Errorf("Function %s reachable in full RTA but not in incremental RTA", fn.String())
+				}
 			}
 
 			t.Log("Incremental RTA test passed - results match full RTA")

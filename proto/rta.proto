@@ -41,6 +41,7 @@ message RTAState {
     map<string, ListOfFunctions> addr_taken_funcs_by_sig = 2;
     map<string, ListOfCallSites> dyn_call_sites = 3;
     map<string, MethodSummary> summary = 4;
+    repeated ssa.Function roots = 5;
 
     // TODO: Invoke site, ConcreteType, InterfaceType
 }

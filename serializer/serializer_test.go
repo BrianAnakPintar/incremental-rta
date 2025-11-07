@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"log"
 	"os"
+	"path/filepath"
 	"rta"
 	"sort"
 	"testing"
@@ -86,8 +87,10 @@ func LoadTestProgram(path string) (*ssa.Program, *ssa.Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.LoadAllSyntax,
 		Fset: token.NewFileSet(),
+		Dir:  filepath.Dir(path),
 	}
-	pkgs, err := packages.Load(cfg, path)
+	file := filepath.Base(path)
+	pkgs, err := packages.Load(cfg, file)
 	if err != nil {
 		return nil, nil, err
 	}

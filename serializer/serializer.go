@@ -194,7 +194,11 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 	}
 
 	for _, sig := range rtaState.AddrTakenFuncsBySig.Keys() {
-		funcs := rtaState.AddrTakenFuncsBySig.At(sig).([]*ssa.Function)
+		funcMap := rtaState.AddrTakenFuncsBySig.At(sig).(map[*ssa.Function]bool)
+		funcs := make([]*ssa.Function, 0, len(funcMap))
+		for fn := range funcMap {
+			funcs = append(funcs, fn)
+		}
 		pbFuncs := make([]*pb.Function, 0, len(funcs))
 		for _, fn := range funcs {
 			pbFuncs = append(pbFuncs, s.serializeFunction(fn))

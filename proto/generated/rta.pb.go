@@ -274,6 +274,7 @@ type RTAState struct {
 	AddrTakenFuncsBySig map[string]*ListOfFunctions `protobuf:"bytes,2,rep,name=addr_taken_funcs_by_sig,json=addrTakenFuncsBySig,proto3" json:"addr_taken_funcs_by_sig,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	DynCallSites        map[string]*ListOfCallSites `protobuf:"bytes,3,rep,name=dyn_call_sites,json=dynCallSites,proto3" json:"dyn_call_sites,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Summary             map[string]*MethodSummary   `protobuf:"bytes,4,rep,name=summary,proto3" json:"summary,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Roots               []*Function                 `protobuf:"bytes,5,rep,name=roots,proto3" json:"roots,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -336,6 +337,13 @@ func (x *RTAState) GetSummary() map[string]*MethodSummary {
 	return nil
 }
 
+func (x *RTAState) GetRoots() []*Function {
+	if x != nil {
+		return x.Roots
+	}
+	return nil
+}
+
 var File_rta_proto protoreflect.FileDescriptor
 
 const file_rta_proto_rawDesc = "" +
@@ -357,12 +365,13 @@ const file_rta_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\x01 \x03(\v2\r.ssa.FunctionR\n" +
 	"provenance\x12:\n" +
-	"\x11functions_created\x18\x02 \x03(\v2\r.ssa.FunctionR\x10functionsCreated\"\xa7\x04\n" +
+	"\x11functions_created\x18\x02 \x03(\v2\r.ssa.FunctionR\x10functionsCreated\"\xcc\x04\n" +
 	"\bRTAState\x12;\n" +
 	"\x12reflect_value_call\x18\x01 \x01(\v2\r.ssa.FunctionR\x10reflectValueCall\x12\\\n" +
 	"\x17addr_taken_funcs_by_sig\x18\x02 \x03(\v2&.rta.RTAState.AddrTakenFuncsBySigEntryR\x13addrTakenFuncsBySig\x12E\n" +
 	"\x0edyn_call_sites\x18\x03 \x03(\v2\x1f.rta.RTAState.DynCallSitesEntryR\fdynCallSites\x124\n" +
-	"\asummary\x18\x04 \x03(\v2\x1a.rta.RTAState.SummaryEntryR\asummary\x1a\\\n" +
+	"\asummary\x18\x04 \x03(\v2\x1a.rta.RTAState.SummaryEntryR\asummary\x12#\n" +
+	"\x05roots\x18\x05 \x03(\v2\r.ssa.FunctionR\x05roots\x1a\\\n" +
 	"\x18AddrTakenFuncsBySigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
 	"\x05value\x18\x02 \x01(\v2\x14.rta.ListOfFunctionsR\x05value:\x028\x01\x1aU\n" +
@@ -412,14 +421,15 @@ var file_rta_proto_depIdxs = []int32{
 	6,  // 8: rta.RTAState.addr_taken_funcs_by_sig:type_name -> rta.RTAState.AddrTakenFuncsBySigEntry
 	7,  // 9: rta.RTAState.dyn_call_sites:type_name -> rta.RTAState.DynCallSitesEntry
 	8,  // 10: rta.RTAState.summary:type_name -> rta.RTAState.SummaryEntry
-	2,  // 11: rta.RTAState.AddrTakenFuncsBySigEntry.value:type_name -> rta.ListOfFunctions
-	3,  // 12: rta.RTAState.DynCallSitesEntry.value:type_name -> rta.ListOfCallSites
-	4,  // 13: rta.RTAState.SummaryEntry.value:type_name -> rta.MethodSummary
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	9,  // 11: rta.RTAState.roots:type_name -> ssa.Function
+	2,  // 12: rta.RTAState.AddrTakenFuncsBySigEntry.value:type_name -> rta.ListOfFunctions
+	3,  // 13: rta.RTAState.DynCallSitesEntry.value:type_name -> rta.ListOfCallSites
+	4,  // 14: rta.RTAState.SummaryEntry.value:type_name -> rta.MethodSummary
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_rta_proto_init() }

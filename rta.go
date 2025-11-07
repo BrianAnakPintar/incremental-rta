@@ -121,6 +121,9 @@ type rta struct {
 
 	// Methods maps each method to its summary information.
 	summary map[*ssa.Function]*MethodSummary
+
+	// Roots of the call graph.
+	roots []*ssa.Function
 }
 
 type concreteTypeInfo struct {
@@ -381,6 +384,7 @@ func AnalyzeAndSaveState(roots []*ssa.Function, buildCallGraph bool) *ResultWith
 		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
 		prog:    roots[0].Prog,
 		summary: make(map[*ssa.Function]*MethodSummary),
+		roots:   roots,
 	}
 
 	if buildCallGraph {
@@ -633,6 +637,7 @@ func implements(cinfo *concreteTypeInfo, iinfo *interfaceTypeInfo) (got bool) {
 
 // Contains the state needed to perform incremental RTA.
 type RTAState struct {
+	Roots            []*ssa.Function
 	ReflectValueCall *ssa.Function
 
 	AddrTakenFuncsBySig typeutil.Map
@@ -745,9 +750,8 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 			}
 		}
 		r.removeOutgoingEdges(root)
-		// Force the changed function onto the worklist for re-analysis
-		// even if it's already in the Reachable set
-		r.worklist = append(r.worklist, root)
+		delete(r.result.Reachable, root)
+		r.addReachable(root, false)
 	}
 
 	// Process the worklist
@@ -771,6 +775,7 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 
 func saveRTAState(r *rta) *RTAState {
 	return &RTAState{
+		Roots:               r.roots,
 		ReflectValueCall:    r.reflectValueCall,
 		AddrTakenFuncsBySig: r.addrTakenFuncsBySig,
 		DynCallSites:        r.dynCallSites,
@@ -782,6 +787,7 @@ func saveRTAState(r *rta) *RTAState {
 }
 
 func refillRTAState(r *rta, state *RTAState) {
+	r.roots = state.Roots
 	r.reflectValueCall = state.ReflectValueCall
 	r.addrTakenFuncsBySig = state.AddrTakenFuncsBySig
 	r.dynCallSites = state.DynCallSites
@@ -808,12 +814,10 @@ func (r *rta) removeOutgoingEdges(f *ssa.Function) {
 	for _, outEdge := range outEdges {
 		outNode := outEdge.Callee
 		filterOutNodeFromIncomingEdges(outNode, nd)
-		// Don't delete from Reachable yet - let pruning handle it
-		// since the function might still be reachable from other paths
 	}
 	nd.Out = nil
 
-	removeBasedOnProvenance()
+	r.removeBasedOnProvenance(f)
 	cg.Nodes[f] = nd
 }
 
@@ -830,8 +834,42 @@ func filterOutNodeFromIncomingEdges(outNode *callgraph.Node, ndToRemove *callgra
 	outNode.In = newIn
 }
 
-func removeBasedOnProvenance() {
-	// TODO(brian): Implement removing based on provenance.
+func (r *rta) removeBasedOnProvenance(f *ssa.Function) {
+	// Go through the functions created by f and remove f from their provenance
+	// If any of those functions have no more provenance, remove them as well
+
+	summary, ok := r.summary[f]
+	if !ok {
+		return
+	}
+
+	for _, created := range summary.FunctionsCreated {
+		if createdSummary, ok := r.summary[created]; ok {
+			// Remove f from created's Provenance
+			newProv := make([]*ssa.Function, 0, len(createdSummary.Provenance))
+			for _, p := range createdSummary.Provenance {
+				if p != f {
+					newProv = append(newProv, p)
+				}
+			}
+			createdSummary.Provenance = newProv
+
+			if len(newProv) == 0 {
+				// Recursively remove created and its dependencies
+				r.removeBasedOnProvenance(created)
+				delete(r.summary, created)
+				delete(r.result.Reachable, created)
+				if cg := r.result.CallGraph; cg != nil {
+					if node := cg.Nodes[created]; node != nil {
+						cg.DeleteNode(node)
+					}
+				}
+			}
+		}
+	}
+
+	// Delete the summary for f after processing
+	delete(r.summary, f)
 }
 
 func (r *rta) pruneIfUnreachable(funcs []*ssa.Function) {
@@ -869,4 +907,40 @@ func (r *rta) pruneUnreachable(f *ssa.Function, visited map[*ssa.Function]bool) 
 	for _, edge := range neighbors {
 		r.pruneUnreachable(edge.Callee.Func, visited)
 	}
+}
+
+// For now, let's just write a simple DFS. Future optimization can be done later.
+func (r *rta) isReachable(f *ssa.Function) bool {
+	visited := make(map[*ssa.Function]bool)
+	var dfs func(funcNode *ssa.Function) bool
+	dfs = func(funcNode *ssa.Function) bool {
+		if funcNode == nil {
+			return false
+		}
+		if visited[funcNode] {
+			return false
+		}
+		visited[funcNode] = true
+
+		if funcNode == f {
+			return true
+		}
+
+		nd := r.result.CallGraph.Nodes[funcNode]
+		for _, edge := range nd.Out {
+			if dfs(edge.Callee.Func) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Start DFS from all root nodes
+	for _, root := range r.roots {
+		if dfs(root) {
+			return true
+		}
+	}
+	return false
+
 }

@@ -2,17 +2,12 @@ package main
 
 func main() {
 	foo()
-	bar()
 }
 
 func foo() {
-	baz()
+	bar()
 }
 
 func bar() {
-
-}
-
-func baz() {
 
 }

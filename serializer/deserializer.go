@@ -19,6 +19,13 @@ type Deserializer struct {
 	functions map[string]*ssa.Function       // We will use function hash as key
 	callSites map[string]ssa.CallInstruction // We will use call site hash as key
 	nodes     map[string]*callgraph.Node
+
+	Diff *Diff
+}
+
+type Diff struct {
+	ModifiedFunctions []*ssa.Function
+	RemovedFunctions  []*pb.Function // Stored as pb.Function since they may not exist in the current prog
 }
 
 func NewDeserializer(prog *ssa.Program) *Deserializer {
@@ -32,6 +39,10 @@ func NewDeserializer(prog *ssa.Program) *Deserializer {
 		functions: make(map[string]*ssa.Function),
 		callSites: make(map[string]ssa.CallInstruction),
 		nodes:     make(map[string]*callgraph.Node),
+		Diff: &Diff{
+			ModifiedFunctions: make([]*ssa.Function, 0),
+			RemovedFunctions:  make([]*pb.Function, 0),
+		},
 	}
 	return res
 }
@@ -201,6 +212,15 @@ func (d *Deserializer) deserializeFunction(f *pb.Function) *ssa.Function {
 
 	fn := pkg.Func(f.Name)
 	d.functions[f.Hash] = fn
+
+	if fn == nil {
+		// Function no longer exists, mark as removed
+		d.Diff.RemovedFunctions = append(d.Diff.RemovedFunctions, f)
+	} else {
+		// Function exists, mark as modified
+		d.Diff.ModifiedFunctions = append(d.Diff.ModifiedFunctions, fn)
+	}
+
 	return fn
 }
 
