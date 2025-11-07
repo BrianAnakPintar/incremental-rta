@@ -5,9 +5,12 @@ func main() {
 }
 
 func foo() {
-
+	zoo()
 }
 
 func bar() {
+}
 
+func zoo() {
+	bar()
 }

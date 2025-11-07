@@ -16,9 +16,24 @@ func TestIncrementalRTA(t *testing.T) {
 		srcAfter  string
 	}{
 		{
-			name:      "basic_test",
+			name:      "simple",
 			srcBefore: "../tests/simple/before.go",
 			srcAfter:  "../tests/simple/after.go",
+		},
+		{
+			name:      "deletion",
+			srcBefore: "../tests/deletion/before.go",
+			srcAfter:  "../tests/deletion/after.go",
+		},
+		{
+			name:      "fnptr",
+			srcBefore: "../tests/fnptr/before.go",
+			srcAfter:  "../tests/fnptr/after.go",
+		},
+		{
+			name:      "closures",
+			srcBefore: "../tests/closures/before.go",
+			srcAfter:  "../tests/closures/after.go",
 		},
 	}
 
