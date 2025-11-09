@@ -5,6 +5,7 @@ import (
 	"os"
 	"rta"
 	"testing"
+	"time"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -85,13 +86,17 @@ func TestIncrementalRTA(t *testing.T) {
 			}
 
 			// Deserialize into the "after" program's context
+			startDeserialize := time.Now()
 			deser := NewDeserializer(progAfter)
 			deserializedResult := deser.DeserializeRTAResult(pbResult)
 			deserializedState := deser.DeserializeRTAState(pbState)
+			deserializeDuration := time.Since(startDeserialize)
 
 			if deserializedResult == nil || deserializedState == nil {
 				t.Fatal("deserialization failed")
 			}
+
+			t.Logf("Deserialization took: %v", deserializeDuration)
 
 			// Create ResultWithState for incremental analysis
 			beforeStateInAfterContext := &rta.ResultWithState{
@@ -108,30 +113,41 @@ func TestIncrementalRTA(t *testing.T) {
 				t.Fatal("main function not found in after program")
 			}
 
+			startFull := time.Now()
 			resultAfterFull := rta.Analyze([]*ssa.Function{mainFuncAfter}, true)
+			fullRTADuration := time.Since(startFull)
 			if resultAfterFull == nil {
 				t.Fatal("full RTA analysis on after program returned nil")
 			}
+
+			t.Logf("️Full RTA took: %v", fullRTADuration)
 
 			t.Logf("After (full RTA): %d reachable functions", len(resultAfterFull.Reachable))
 			t.Logf("After (full RTA): %d call graph nodes", len(resultAfterFull.CallGraph.Nodes))
 
 			afterFullDOT := callGraphToDOT(resultAfterFull.CallGraph)
-			t.Logf("After (full RTA) call graph:\n%s", afterFullDOT)
+			// t.Logf("After (full RTA) call graph:\n%s", afterFullDOT)
 
 			diffs := deser.Diff
 
 			// Run incremental RTA with the changed function
+			startIncremental := time.Now()
 			resultAfterIncremental := rta.IncrementalAnalyze(diffs.ModifiedFunctions, beforeStateInAfterContext)
+			incrementalRTADuration := time.Since(startIncremental)
 			if resultAfterIncremental == nil {
 				t.Fatal("incremental RTA analysis returned nil")
 			}
+
+			t.Logf("Incremental RTA took: %v", incrementalRTADuration)
+			t.Logf("Speedup: %.2fx (Full: %v, Incremental: %v)",
+				float64(fullRTADuration)/float64(incrementalRTADuration),
+				fullRTADuration, incrementalRTADuration)
 
 			t.Logf("After (incremental): %d reachable functions", len(resultAfterIncremental.Result.Reachable))
 			t.Logf("After (incremental): %d call graph nodes", len(resultAfterIncremental.Result.CallGraph.Nodes))
 
 			afterIncrementalDOT := callGraphToDOT(resultAfterIncremental.Result.CallGraph)
-			t.Logf("After (incremental) call graph:\n%s", afterIncrementalDOT)
+			// t.Logf("After (incremental) call graph:\n%s", afterIncrementalDOT)
 
 			// Compare full RTA and incremental RTA results
 			if afterFullDOT != afterIncrementalDOT {
