@@ -224,6 +224,14 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		pbRTAState.Summary[hashFunction(fn)] = s.SerializeRTAMethodSummaries(map[*ssa.Function]*rta.MethodSummary{fn: summary})[hashFunction(fn)]
 	}
 
+	// Serialize roots so the deserializer can reconstruct rta.State.Roots
+	if len(rtaState.Roots) > 0 {
+		pbRTAState.Roots = make([]*pb.Function, 0, len(rtaState.Roots))
+		for _, root := range rtaState.Roots {
+			pbRTAState.Roots = append(pbRTAState.Roots, s.serializeFunction(root))
+		}
+	}
+
 	return pbRTAState
 }
 

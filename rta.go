@@ -125,6 +125,11 @@ type rta struct {
 
 	// Roots of the call graph.
 	roots []*ssa.Function
+
+	// True if the call graph has been modified since last traversal.
+	dirtyCG bool
+
+	traversable map[*callgraph.Node]bool
 }
 
 type concreteTypeInfo struct {
@@ -329,9 +334,11 @@ func Analyze(roots []*ssa.Function, buildCallGraph bool) *Result {
 	}
 
 	r := &rta{
-		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
-		prog:    roots[0].Prog,
-		summary: make(map[*ssa.Function]*MethodSummary),
+		result:      &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
+		prog:        roots[0].Prog,
+		summary:     make(map[*ssa.Function]*MethodSummary),
+		traversable: make(map[*callgraph.Node]bool),
+		dirtyCG:     true,
 	}
 
 	if buildCallGraph {
@@ -382,10 +389,12 @@ func AnalyzeAndSaveState(roots []*ssa.Function, buildCallGraph bool) *ResultWith
 	}
 
 	r := &rta{
-		result:  &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
-		prog:    roots[0].Prog,
-		summary: make(map[*ssa.Function]*MethodSummary),
-		roots:   roots,
+		result:      &Result{Reachable: make(map[*ssa.Function]struct{ AddrTaken bool })},
+		prog:        roots[0].Prog,
+		summary:     make(map[*ssa.Function]*MethodSummary),
+		roots:       roots,
+		traversable: make(map[*callgraph.Node]bool),
+		dirtyCG:     true,
 	}
 
 	if buildCallGraph {
@@ -720,9 +729,11 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 	}
 
 	r := &rta{
-		result:  prevRun.Result,
-		prog:    roots[0].Prog,
-		summary: prevRun.State.Summary,
+		result:      prevRun.Result,
+		prog:        roots[0].Prog,
+		summary:     prevRun.State.Summary,
+		traversable: make(map[*callgraph.Node]bool),
+		dirtyCG:     true,
 	}
 
 	if r.result.CallGraph == nil {
@@ -778,7 +789,36 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 	}
 
 	// Prune functions that are no longer reachable
-	r.pruneIfUnreachable(potentialFuncs)
+	r.TraversabilityCheck()
+
+	for len(potentialFuncs) > 0 {
+		fn := potentialFuncs[len(potentialFuncs)-1]
+		potentialFuncs = potentialFuncs[:len(potentialFuncs)-1]
+
+		node := r.result.CallGraph.Nodes[fn]
+		if r.traversable[node] {
+			continue
+		}
+
+		if node != nil {
+			for _, edge := range node.Out {
+				potentialFuncs = append(potentialFuncs, edge.Callee.Func)
+			}
+		}
+		r.removeOutgoingEdges(fn)
+
+		delete(r.result.Reachable, fn)
+		delete(r.result.CallGraph.Nodes, fn)
+
+		summary := r.summary[fn]
+		if summary != nil {
+			funcsCreated := summary.FunctionsCreated
+			for _, fnCreated := range funcsCreated {
+				r.removeBasedOnProvenance(fn, fnCreated)
+				potentialFuncs = append(potentialFuncs, fnCreated)
+			}
+		}
+	}
 
 	res := &ResultWithState{
 		Result: r.result,
@@ -879,6 +919,7 @@ func (r *rta) removeBasedOnProvenance(prov *ssa.Function, fn *ssa.Function) {
 		}
 
 		// Remove all incoming edges and update outgoing edges of callers
+		// At some point we may want to distinguish between dynamic method and function calls.
 		inEdges := nd.In
 		for _, edge := range inEdges {
 			if strings.Contains(edge.Description(), "dynamic") {
@@ -893,79 +934,28 @@ func (r *rta) removeBasedOnProvenance(prov *ssa.Function, fn *ssa.Function) {
 			// No incoming edges, remove from reachable set
 			delete(r.result.Reachable, fn)
 		}
+
+		// Mark call graph as dirty for traversal check
+		r.dirtyCG = true
 	}
 
 }
 
-func (r *rta) pruneIfUnreachable(funcs []*ssa.Function) {
-	// TODO(brian): Implement pruning unreachable functions.
-	for _, f := range funcs {
-		nd := r.result.CallGraph.Nodes[f]
-		if nd == nil {
-			continue
-		}
-
-		// If no incoming edges, remove from reachable set.
-		if len(nd.In) == 0 {
-			r.pruneUnreachable(f, make(map[*ssa.Function]bool))
-		}
-	}
-}
-
-// Simple DFS
-func (r *rta) pruneUnreachable(f *ssa.Function, visited map[*ssa.Function]bool) {
-	if visited[f] {
-		return
-	}
-	visited[f] = true
-
-	nd := r.result.CallGraph.Nodes[f]
-	neighbors := nd.Out
-
-	if len(nd.In) == 0 {
-		delete(r.result.Reachable, f)
-		r.result.CallGraph.DeleteNode(nd)
-	} else {
-		return
-	}
-
-	for _, edge := range neighbors {
-		r.pruneUnreachable(edge.Callee.Func, visited)
-	}
-}
-
-// For now, let's just write a simple DFS. Future optimization can be done later.
-func (r *rta) isReachable(f *ssa.Function) bool {
-	visited := make(map[*ssa.Function]bool)
-	var dfs func(funcNode *ssa.Function) bool
-	dfs = func(funcNode *ssa.Function) bool {
-		if funcNode == nil {
-			return false
-		}
-		if visited[funcNode] {
-			return false
-		}
-		visited[funcNode] = true
-
-		if funcNode == f {
-			return true
-		}
-
-		nd := r.result.CallGraph.Nodes[funcNode]
-		for _, edge := range nd.Out {
-			if dfs(edge.Callee.Func) {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Start DFS from all root nodes
+func (r *rta) TraversabilityCheck() {
 	for _, root := range r.roots {
-		if dfs(root) {
-			return true
-		}
+		r.MarkTraversable(r.result.CallGraph.Nodes[root])
 	}
-	return false
+	r.dirtyCG = false
+}
 
+func (r *rta) MarkTraversable(node *callgraph.Node) {
+	if r.traversable[node] {
+		return
+	}
+	r.traversable[node] = true
+
+	// Simple DFS
+	for _, edge := range node.Out {
+		r.MarkTraversable(edge.Callee)
+	}
 }

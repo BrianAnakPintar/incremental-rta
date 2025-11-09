@@ -486,6 +486,17 @@ func (d *Deserializer) DeserializeRTAState(pbRTAState *pb.RTAState) *rta.RTAStat
 		}
 	}
 
+	// Deserialize roots
+	if len(pbRTAState.Roots) > 0 {
+		rtaState.Roots = make([]*ssa.Function, 0, len(pbRTAState.Roots))
+		for _, pbRoot := range pbRTAState.Roots {
+			rootFn := d.deserializeFunction(pbRoot)
+			if rootFn != nil {
+				rtaState.Roots = append(rtaState.Roots, rootFn)
+			}
+		}
+	}
+
 	return rtaState
 }
 

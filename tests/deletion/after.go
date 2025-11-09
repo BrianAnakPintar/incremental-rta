@@ -9,4 +9,3 @@ func main() {
 func Foo() {
 	fmt.Println("foo (after)")
 }
-
