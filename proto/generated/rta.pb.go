@@ -79,7 +79,10 @@ type RTAResult struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	CallGraph *CallGraph             `protobuf:"bytes,1,opt,name=call_graph,json=callGraph,proto3" json:"call_graph,omitempty"`
 	// I am tempted to make this a map<string, ReachableEntry> so lookups are faster.
-	Reachable     []*ReachableEntry `protobuf:"bytes,2,rep,name=reachable,proto3" json:"reachable,omitempty"`
+	Reachable []*ReachableEntry `protobuf:"bytes,2,rep,name=reachable,proto3" json:"reachable,omitempty"`
+	// Runtime types discovered by RTA. The value indicates whether the type is
+	// inaccessible to reflection (the same meaning as in rta.Result.RuntimeTypes).
+	RuntimeTypes  map[string]bool `protobuf:"bytes,3,rep,name=runtime_types,json=runtimeTypes,proto3" json:"runtime_types,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -124,6 +127,13 @@ func (x *RTAResult) GetCallGraph() *CallGraph {
 func (x *RTAResult) GetReachable() []*ReachableEntry {
 	if x != nil {
 		return x.Reachable
+	}
+	return nil
+}
+
+func (x *RTAResult) GetRuntimeTypes() map[string]bool {
+	if x != nil {
+		return x.RuntimeTypes
 	}
 	return nil
 }
@@ -275,8 +285,13 @@ type RTAState struct {
 	DynCallSites        map[string]*ListOfCallSites `protobuf:"bytes,3,rep,name=dyn_call_sites,json=dynCallSites,proto3" json:"dyn_call_sites,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Summary             map[string]*MethodSummary   `protobuf:"bytes,4,rep,name=summary,proto3" json:"summary,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Roots               []*Function                 `protobuf:"bytes,5,rep,name=roots,proto3" json:"roots,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Invoke-mode call sites keyed by interface type string.
+	InvokeSites map[string]*ListOfCallSites `protobuf:"bytes,6,rep,name=invoke_sites,json=invokeSites,proto3" json:"invoke_sites,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Concrete and interface types known to RTA (string representations).
+	ConcreteTypes  []string `protobuf:"bytes,7,rep,name=concrete_types,json=concreteTypes,proto3" json:"concrete_types,omitempty"`
+	InterfaceTypes []string `protobuf:"bytes,8,rep,name=interface_types,json=interfaceTypes,proto3" json:"interface_types,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RTAState) Reset() {
@@ -344,6 +359,27 @@ func (x *RTAState) GetRoots() []*Function {
 	return nil
 }
 
+func (x *RTAState) GetInvokeSites() map[string]*ListOfCallSites {
+	if x != nil {
+		return x.InvokeSites
+	}
+	return nil
+}
+
+func (x *RTAState) GetConcreteTypes() []string {
+	if x != nil {
+		return x.ConcreteTypes
+	}
+	return nil
+}
+
+func (x *RTAState) GetInterfaceTypes() []string {
+	if x != nil {
+		return x.InterfaceTypes
+	}
+	return nil
+}
+
 var File_rta_proto protoreflect.FileDescriptor
 
 const file_rta_proto_rawDesc = "" +
@@ -351,11 +387,15 @@ const file_rta_proto_rawDesc = "" +
 	"\trta.proto\x12\x03rta\x1a\x0fcallgraph.proto\x1a\tssa.proto\"`\n" +
 	"\x0eReachableEntry\x12)\n" +
 	"\bfunction\x18\x01 \x01(\v2\r.ssa.FunctionR\bfunction\x12#\n" +
-	"\raddress_taken\x18\x02 \x01(\bR\faddressTaken\"s\n" +
+	"\raddress_taken\x18\x02 \x01(\bR\faddressTaken\"\xfb\x01\n" +
 	"\tRTAResult\x123\n" +
 	"\n" +
 	"call_graph\x18\x01 \x01(\v2\x14.callgraph.CallGraphR\tcallGraph\x121\n" +
-	"\treachable\x18\x02 \x03(\v2\x13.rta.ReachableEntryR\treachable\">\n" +
+	"\treachable\x18\x02 \x03(\v2\x13.rta.ReachableEntryR\treachable\x12E\n" +
+	"\rruntime_types\x18\x03 \x03(\v2 .rta.RTAResult.RuntimeTypesEntryR\fruntimeTypes\x1a?\n" +
+	"\x11RuntimeTypesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\bR\x05value:\x028\x01\">\n" +
 	"\x0fListOfFunctions\x12+\n" +
 	"\tfunctions\x18\x01 \x03(\v2\r.ssa.FunctionR\tfunctions\"?\n" +
 	"\x0fListOfCallSites\x12,\n" +
@@ -365,13 +405,16 @@ const file_rta_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\x01 \x03(\v2\r.ssa.FunctionR\n" +
 	"provenance\x12:\n" +
-	"\x11functions_created\x18\x02 \x03(\v2\r.ssa.FunctionR\x10functionsCreated\"\xcc\x04\n" +
+	"\x11functions_created\x18\x02 \x03(\v2\r.ssa.FunctionR\x10functionsCreated\"\xb5\x06\n" +
 	"\bRTAState\x12;\n" +
 	"\x12reflect_value_call\x18\x01 \x01(\v2\r.ssa.FunctionR\x10reflectValueCall\x12\\\n" +
 	"\x17addr_taken_funcs_by_sig\x18\x02 \x03(\v2&.rta.RTAState.AddrTakenFuncsBySigEntryR\x13addrTakenFuncsBySig\x12E\n" +
 	"\x0edyn_call_sites\x18\x03 \x03(\v2\x1f.rta.RTAState.DynCallSitesEntryR\fdynCallSites\x124\n" +
 	"\asummary\x18\x04 \x03(\v2\x1a.rta.RTAState.SummaryEntryR\asummary\x12#\n" +
-	"\x05roots\x18\x05 \x03(\v2\r.ssa.FunctionR\x05roots\x1a\\\n" +
+	"\x05roots\x18\x05 \x03(\v2\r.ssa.FunctionR\x05roots\x12A\n" +
+	"\finvoke_sites\x18\x06 \x03(\v2\x1e.rta.RTAState.InvokeSitesEntryR\vinvokeSites\x12%\n" +
+	"\x0econcrete_types\x18\a \x03(\tR\rconcreteTypes\x12'\n" +
+	"\x0finterface_types\x18\b \x03(\tR\x0einterfaceTypes\x1a\\\n" +
 	"\x18AddrTakenFuncsBySigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
 	"\x05value\x18\x02 \x01(\v2\x14.rta.ListOfFunctionsR\x05value:\x028\x01\x1aU\n" +
@@ -380,7 +423,10 @@ const file_rta_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x14.rta.ListOfCallSitesR\x05value:\x028\x01\x1aN\n" +
 	"\fSummaryEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
-	"\x05value\x18\x02 \x01(\v2\x12.rta.MethodSummaryR\x05value:\x028\x01B\x0eZ\frta/proto/pbb\x06proto3"
+	"\x05value\x18\x02 \x01(\v2\x12.rta.MethodSummaryR\x05value:\x028\x01\x1aT\n" +
+	"\x10InvokeSitesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12*\n" +
+	"\x05value\x18\x02 \x01(\v2\x14.rta.ListOfCallSitesR\x05value:\x028\x01B\x0eZ\frta/proto/pbb\x06proto3"
 
 var (
 	file_rta_proto_rawDescOnce sync.Once
@@ -394,7 +440,7 @@ func file_rta_proto_rawDescGZIP() []byte {
 	return file_rta_proto_rawDescData
 }
 
-var file_rta_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_rta_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_rta_proto_goTypes = []any{
 	(*ReachableEntry)(nil),  // 0: rta.ReachableEntry
 	(*RTAResult)(nil),       // 1: rta.RTAResult
@@ -402,34 +448,39 @@ var file_rta_proto_goTypes = []any{
 	(*ListOfCallSites)(nil), // 3: rta.ListOfCallSites
 	(*MethodSummary)(nil),   // 4: rta.MethodSummary
 	(*RTAState)(nil),        // 5: rta.RTAState
-	nil,                     // 6: rta.RTAState.AddrTakenFuncsBySigEntry
-	nil,                     // 7: rta.RTAState.DynCallSitesEntry
-	nil,                     // 8: rta.RTAState.SummaryEntry
-	(*Function)(nil),        // 9: ssa.Function
-	(*CallGraph)(nil),       // 10: callgraph.CallGraph
-	(*CallSite)(nil),        // 11: ssa.CallSite
+	nil,                     // 6: rta.RTAResult.RuntimeTypesEntry
+	nil,                     // 7: rta.RTAState.AddrTakenFuncsBySigEntry
+	nil,                     // 8: rta.RTAState.DynCallSitesEntry
+	nil,                     // 9: rta.RTAState.SummaryEntry
+	nil,                     // 10: rta.RTAState.InvokeSitesEntry
+	(*Function)(nil),        // 11: ssa.Function
+	(*CallGraph)(nil),       // 12: callgraph.CallGraph
+	(*CallSite)(nil),        // 13: ssa.CallSite
 }
 var file_rta_proto_depIdxs = []int32{
-	9,  // 0: rta.ReachableEntry.function:type_name -> ssa.Function
-	10, // 1: rta.RTAResult.call_graph:type_name -> callgraph.CallGraph
+	11, // 0: rta.ReachableEntry.function:type_name -> ssa.Function
+	12, // 1: rta.RTAResult.call_graph:type_name -> callgraph.CallGraph
 	0,  // 2: rta.RTAResult.reachable:type_name -> rta.ReachableEntry
-	9,  // 3: rta.ListOfFunctions.functions:type_name -> ssa.Function
-	11, // 4: rta.ListOfCallSites.call_sites:type_name -> ssa.CallSite
-	9,  // 5: rta.MethodSummary.provenance:type_name -> ssa.Function
-	9,  // 6: rta.MethodSummary.functions_created:type_name -> ssa.Function
-	9,  // 7: rta.RTAState.reflect_value_call:type_name -> ssa.Function
-	6,  // 8: rta.RTAState.addr_taken_funcs_by_sig:type_name -> rta.RTAState.AddrTakenFuncsBySigEntry
-	7,  // 9: rta.RTAState.dyn_call_sites:type_name -> rta.RTAState.DynCallSitesEntry
-	8,  // 10: rta.RTAState.summary:type_name -> rta.RTAState.SummaryEntry
-	9,  // 11: rta.RTAState.roots:type_name -> ssa.Function
-	2,  // 12: rta.RTAState.AddrTakenFuncsBySigEntry.value:type_name -> rta.ListOfFunctions
-	3,  // 13: rta.RTAState.DynCallSitesEntry.value:type_name -> rta.ListOfCallSites
-	4,  // 14: rta.RTAState.SummaryEntry.value:type_name -> rta.MethodSummary
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	6,  // 3: rta.RTAResult.runtime_types:type_name -> rta.RTAResult.RuntimeTypesEntry
+	11, // 4: rta.ListOfFunctions.functions:type_name -> ssa.Function
+	13, // 5: rta.ListOfCallSites.call_sites:type_name -> ssa.CallSite
+	11, // 6: rta.MethodSummary.provenance:type_name -> ssa.Function
+	11, // 7: rta.MethodSummary.functions_created:type_name -> ssa.Function
+	11, // 8: rta.RTAState.reflect_value_call:type_name -> ssa.Function
+	7,  // 9: rta.RTAState.addr_taken_funcs_by_sig:type_name -> rta.RTAState.AddrTakenFuncsBySigEntry
+	8,  // 10: rta.RTAState.dyn_call_sites:type_name -> rta.RTAState.DynCallSitesEntry
+	9,  // 11: rta.RTAState.summary:type_name -> rta.RTAState.SummaryEntry
+	11, // 12: rta.RTAState.roots:type_name -> ssa.Function
+	10, // 13: rta.RTAState.invoke_sites:type_name -> rta.RTAState.InvokeSitesEntry
+	2,  // 14: rta.RTAState.AddrTakenFuncsBySigEntry.value:type_name -> rta.ListOfFunctions
+	3,  // 15: rta.RTAState.DynCallSitesEntry.value:type_name -> rta.ListOfCallSites
+	4,  // 16: rta.RTAState.SummaryEntry.value:type_name -> rta.MethodSummary
+	3,  // 17: rta.RTAState.InvokeSitesEntry.value:type_name -> rta.ListOfCallSites
+	18, // [18:18] is the sub-list for method output_type
+	18, // [18:18] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_rta_proto_init() }
@@ -445,7 +496,7 @@ func file_rta_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_rta_proto_rawDesc), len(file_rta_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

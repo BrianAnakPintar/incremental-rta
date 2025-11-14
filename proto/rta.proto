@@ -20,7 +20,9 @@ message RTAResult {
     // I am tempted to make this a map<string, ReachableEntry> so lookups are faster.
     repeated ReachableEntry reachable = 2;
 
-    // TODO(brian) Runtime types, but for now we don't deal with Interfaces
+    // Runtime types discovered by RTA. The value indicates whether the type is
+    // inaccessible to reflection (the same meaning as in rta.Result.RuntimeTypes).
+    map<string, bool> runtime_types = 3;
 }
 
 message ListOfFunctions {
@@ -43,5 +45,10 @@ message RTAState {
     map<string, MethodSummary> summary = 4;
     repeated ssa.Function roots = 5;
 
-    // TODO: Invoke site, ConcreteType, InterfaceType
+    // Invoke-mode call sites keyed by interface type string.
+    map<string, ListOfCallSites> invoke_sites = 6;
+
+    // Concrete and interface types known to RTA (string representations).
+    repeated string concrete_types = 7;
+    repeated string interface_types = 8;
 }

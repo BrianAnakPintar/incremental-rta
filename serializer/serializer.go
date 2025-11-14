@@ -179,6 +179,17 @@ func (s *Serializer) SerializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
 		})
 	}
 
+	// Serialize runtime types (type string -> skip flag)
+	if rtaResult.RuntimeTypes.Keys() != nil {
+		if pbRTAResult.RuntimeTypes == nil {
+			pbRTAResult.RuntimeTypes = make(map[string]bool)
+		}
+		for _, T := range rtaResult.RuntimeTypes.Keys() {
+			skip, _ := rtaResult.RuntimeTypes.At(T).(bool)
+			pbRTAResult.RuntimeTypes[T.String()] = skip
+		}
+	}
+
 	return pbRTAResult
 }
 
@@ -215,6 +226,19 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		}
 
 		pbRTAState.DynCallSites[sig.String()] = &pb.ListOfCallSites{CallSites: pbSites}
+	}
+
+	// Serialize invoke-mode call sites (interface call sites)
+	if pbRTAState.InvokeSites == nil {
+		pbRTAState.InvokeSites = make(map[string]*pb.ListOfCallSites)
+	}
+	for _, sig := range rtaState.InvokeSites.Keys() {
+		sites := rtaState.InvokeSites.At(sig).([]ssa.CallInstruction)
+		pbSites := make([]*pb.CallSite, 0, len(sites))
+		for _, site := range sites {
+			pbSites = append(pbSites, s.serializeCallSite(site))
+		}
+		pbRTAState.InvokeSites[sig.String()] = &pb.ListOfCallSites{CallSites: pbSites}
 	}
 
 	for fn, summary := range rtaState.Summary {

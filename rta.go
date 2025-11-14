@@ -743,6 +743,35 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 	// Refill the RTA state from previous run
 	refillRTAState(r, prevRun.State)
 
+	// Ensure concrete/interface maps have hashers (in case prev state was nil
+	// or came from an older run). Use the same hasher as the runtime types map
+	// so keys (types.Type) are hashed consistently.
+	hasher := typeutil.MakeHasher()
+	r.result.RuntimeTypes.SetHasher(hasher)
+	r.concreteTypes.SetHasher(hasher)
+	r.interfaceTypes.SetHasher(hasher)
+
+	// Populate concreteTypes and interfaceTypes from previously discovered
+	// runtime types so that implementations/interfaces queries work
+	// incrementally. These maps are created lazily in the non-incremental
+	// analysis, so we must ensure they exist and are filled for previously
+	// observed runtime types.
+	r.result.RuntimeTypes.Iterate(func(T types.Type, _ any) {
+		if T == nil {
+			return
+		}
+		// If T is an interface type, make sure its interface info exists.
+		if _, ok := types.Unalias(T).Underlying().(*types.Interface); ok {
+			// implementations will create interfaceTypeInfo and iterate existing
+			// concreteTypes to populate implementations.
+			r.implementations(types.Unalias(T).Underlying().(*types.Interface))
+			return
+		}
+		// Otherwise T is a concrete type: create its concreteTypeInfo and
+		// record which interfaces it implements.
+		r.interfaces(T)
+	})
+
 	// Collect functions that may become unreachable after removing edges
 	potentialFuncs := make([]*ssa.Function, 0)
 

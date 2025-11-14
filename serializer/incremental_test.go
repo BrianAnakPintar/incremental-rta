@@ -46,6 +46,11 @@ func TestIncrementalRTA(t *testing.T) {
 			srcBefore: "../tests/mutual_recursion/before.go",
 			srcAfter:  "../tests/mutual_recursion/after.go",
 		},
+		{
+			name:      "interfaces_add",
+			srcBefore: "../tests/interfaces_add/before.go",
+			srcAfter:  "../tests/interfaces_add/after.go",
+		},
 	}
 
 	for _, tt := range tests {

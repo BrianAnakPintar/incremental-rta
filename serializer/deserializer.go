@@ -9,6 +9,7 @@ import (
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
+	"golang.org/x/tools/go/types/typeutil"
 )
 
 type Deserializer struct {
@@ -20,6 +21,8 @@ type Deserializer struct {
 	callSites map[string]ssa.CallInstruction // We will use call site hash as key
 	nodes     map[string]*callgraph.Node
 	edges     map[string]*callgraph.Edge
+	// map of type string -> types.Type discovered in the program
+	typesMap map[string]types.Type
 
 	Diff *Diff
 }
@@ -41,6 +44,7 @@ func NewDeserializer(prog *ssa.Program) *Deserializer {
 		callSites: make(map[string]ssa.CallInstruction),
 		nodes:     make(map[string]*callgraph.Node),
 		edges:     make(map[string]*callgraph.Edge),
+		typesMap:  make(map[string]types.Type),
 		Diff: &Diff{
 			ModifiedFunctions: make([]*ssa.Function, 0),
 			RemovedFunctions:  make([]*pb.Function, 0),
@@ -123,6 +127,12 @@ func (d *Deserializer) exploreTypeRecursively(typ types.Type, visitedTypes map[s
 		return
 	}
 	visitedTypes[typeStr] = true
+
+	// Record the type in the types map for later lookup during deserialization
+	if d.typesMap == nil {
+		d.typesMap = make(map[string]types.Type)
+	}
+	d.typesMap[typeStr] = typ
 
 	// Add exported methods for this type
 	mset := d.prog.MethodSets.MethodSet(typ)
@@ -388,10 +398,21 @@ func (d *Deserializer) DeserializeRTAResult(pbRTAResult *pb.RTAResult) *rta.Resu
 		}
 	}
 
-	return &rta.Result{
+	res := &rta.Result{
 		CallGraph: cg,
 		Reachable: reachable,
 	}
+
+	// Reconstruct runtime types map
+	hasher := typeutil.MakeHasher()
+	res.RuntimeTypes.SetHasher(hasher)
+	for typeStr, skip := range pbRTAResult.RuntimeTypes {
+		if T, ok := d.typesMap[typeStr]; ok {
+			res.RuntimeTypes.Set(T, skip)
+		}
+	}
+
+	return res
 }
 
 func (d *Deserializer) DeserializeRTAState(pbRTAState *pb.RTAState) *rta.RTAState {
@@ -451,6 +472,33 @@ func (d *Deserializer) DeserializeRTAState(pbRTAState *pb.RTAState) *rta.RTAStat
 		// Only add if we found a valid signature type
 		if sigType != nil && len(callSites) > 0 {
 			rtaState.DynCallSites.Set(sigType, callSites)
+		}
+	}
+
+	// Deserialize InvokeSites (interface call sites)
+	for _, pbListOfCallSites := range pbRTAState.InvokeSites {
+		callSites := make([]ssa.CallInstruction, 0, len(pbListOfCallSites.CallSites))
+		var sigType types.Type
+
+		for _, pbCS := range pbListOfCallSites.CallSites {
+			cs := d.deserializeCallSite(pbCS)
+			if cs != nil {
+				callSites = append(callSites, cs)
+				// Use the interface type from the first valid call site
+				if sigType == nil {
+					// For invoke sites, the value.Type() is an interface
+					if cs.Common().Value != nil {
+						t := cs.Common().Value.Type()
+						if t != nil {
+							sigType = t
+						}
+					}
+				}
+			}
+		}
+
+		if sigType != nil && len(callSites) > 0 {
+			rtaState.InvokeSites.Set(sigType, callSites)
 		}
 	}
 
