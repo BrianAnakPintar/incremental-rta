@@ -1,6 +1,8 @@
 package serializer
 
 import (
+	"fmt"
+	"go/types"
 	"rta"
 	pb "rta/proto/generated"
 
@@ -10,9 +12,10 @@ import (
 
 // The struct provides faster lookup and is helpful for dealing with addresses
 type Serializer struct {
-	functions map[*ssa.Function]*pb.Function
-	callsites map[ssa.CallInstruction]*pb.CallSite
-	nodes     map[*callgraph.Node]*pb.Node
+	functions    map[*ssa.Function]*pb.Function
+	callsites    map[ssa.CallInstruction]*pb.CallSite
+	nodes        map[*callgraph.Node]*pb.Node
+	currentGraph *callgraph.Graph
 }
 
 func NewSerializer() *Serializer {
@@ -42,17 +45,27 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 			Name: f.Pkg.Pkg.Name(),
 			Path: f.Pkg.Pkg.Path(),
 		}
+	} else {
+		// Try to recover package from receiver if possible
+		if f.Signature.Recv() != nil {
+			recvType := f.Signature.Recv().Type()
+			// Unwrap pointer
+			if ptr, ok := recvType.(*types.Pointer); ok {
+				recvType = ptr.Elem()
+			}
+			if named, ok := recvType.(*types.Named); ok {
+				if named.Obj().Pkg() != nil {
+					pkg = &pb.Package{
+						Name: named.Obj().Pkg().Name(),
+						Path: named.Obj().Pkg().Path(),
+					}
+				}
+			}
+		}
 	}
 
-	if f.Pkg == nil || f.Pkg.Pkg == nil {
-		res = &pb.Function{
-			Name:      f.Name(),
-			Package:   &pb.Package{Name: "unknown", Path: "unknown"}, // TODO: leave for now
-			Signature: f.Signature.String(),
-			Hash:      hashFunction(f),
-		}
-		s.functions[f] = res
-		return res
+	if pkg == nil {
+		pkg = &pb.Package{Name: "unknown", Path: "unknown"}
 	}
 
 	res = &pb.Function{
@@ -60,6 +73,75 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 		Package:   pkg,
 		Signature: f.Signature.String(),
 		Hash:      hashFunction(f),
+		Synthetic: f.Synthetic,
+	}
+
+	// Handle Parent / Anon Index
+	if f.Parent() != nil {
+		res.Parent = s.serializeFunction(f.Parent())
+		// Find index
+		for i, anon := range f.Parent().AnonFuncs {
+			if anon == f {
+				res.AnonIndex = int32(i)
+				break
+			}
+		}
+	}
+
+	// Handle Receiver
+	if f.Signature.Recv() != nil {
+		res.Receiver = f.Signature.Recv().Type().String()
+	}
+
+	// Handle ReferencedBy for synthetic functions that are hard to find
+	if f.Synthetic != "" && f.Pkg == nil && f.Parent() == nil {
+		if refs := f.Referrers(); refs != nil {
+			foundRef := false
+			for _, ref := range *refs {
+				if parent := ref.Parent(); parent != nil {
+					if parent != f {
+						res.ReferencedBy = hashFunction(parent)
+						foundRef = true
+						break
+					}
+				}
+			}
+			if !foundRef {
+				// Try to find referrer from CallGraph
+				if s.currentGraph != nil {
+					if node, ok := s.currentGraph.Nodes[f]; ok {
+						for _, edge := range node.In {
+							if edge.Caller.Func != f {
+								res.ReferencedBy = hashFunction(edge.Caller.Func)
+								fmt.Printf("Found referrer for %s: %s (%s)\n", f.Name(), edge.Caller.Func.Name(), res.ReferencedBy)
+								foundRef = true
+								break
+							}
+						}
+					}
+				}
+			}
+			if !foundRef {
+				fmt.Printf("Warning: Could not find referrer for synthetic function %s (%s)\n", f.Name(), f.Synthetic)
+			}
+		} else {
+			// Try to find referrer from CallGraph
+			foundRef := false
+			if s.currentGraph != nil {
+				if node, ok := s.currentGraph.Nodes[f]; ok {
+					for _, edge := range node.In {
+						if edge.Caller.Func != f {
+							res.ReferencedBy = hashFunction(edge.Caller.Func)
+							foundRef = true
+							break
+						}
+					}
+				}
+			}
+			if !foundRef {
+				fmt.Printf("Warning: No referrers for synthetic function %s (%s)\n", f.Name(), f.Synthetic)
+			}
+		}
 	}
 
 	s.functions[f] = res
@@ -166,6 +248,7 @@ func (s *Serializer) serializeCallGraph(cg *callgraph.Graph) *pb.CallGraph {
 
 // === RTA serialization ===
 func (s *Serializer) SerializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
+	s.currentGraph = rtaResult.CallGraph
 	pbRTAResult := &pb.RTAResult{
 		CallGraph: s.serializeCallGraph(rtaResult.CallGraph),
 		Reachable: make([]*pb.ReachableEntry, 0, len(rtaResult.Reachable)),

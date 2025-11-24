@@ -10,12 +10,18 @@ message Package {
 }
 
 message Function {
-    // hash will be an easy way to see if a function has changed
+    // hash will be the canonical identifier for a function
     string hash = 1;
 
     string name = 2;
     string signature = 3;
     Package package = 4; 
+
+    Function parent = 5;
+    int32 anon_index = 6;
+    string receiver = 7;
+    string synthetic = 8;
+    string referenced_by = 9;
 }
 
 message CallSite {

@@ -75,11 +75,16 @@ func (x *Package) GetPath() string {
 
 type Function struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// hash will be an easy way to see if a function has changed
-	Hash          string   `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
-	Name          string   `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Signature     string   `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
-	Package       *Package `protobuf:"bytes,4,opt,name=package,proto3" json:"package,omitempty"`
+	// hash will be the canonical identifier for a function
+	Hash          string    `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	Name          string    `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Signature     string    `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
+	Package       *Package  `protobuf:"bytes,4,opt,name=package,proto3" json:"package,omitempty"`
+	Parent        *Function `protobuf:"bytes,5,opt,name=parent,proto3" json:"parent,omitempty"`
+	AnonIndex     int32     `protobuf:"varint,6,opt,name=anon_index,json=anonIndex,proto3" json:"anon_index,omitempty"`
+	Receiver      string    `protobuf:"bytes,7,opt,name=receiver,proto3" json:"receiver,omitempty"`
+	Synthetic     string    `protobuf:"bytes,8,opt,name=synthetic,proto3" json:"synthetic,omitempty"`
+	ReferencedBy  string    `protobuf:"bytes,9,opt,name=referenced_by,json=referencedBy,proto3" json:"referenced_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -140,6 +145,41 @@ func (x *Function) GetPackage() *Package {
 		return x.Package
 	}
 	return nil
+}
+
+func (x *Function) GetParent() *Function {
+	if x != nil {
+		return x.Parent
+	}
+	return nil
+}
+
+func (x *Function) GetAnonIndex() int32 {
+	if x != nil {
+		return x.AnonIndex
+	}
+	return 0
+}
+
+func (x *Function) GetReceiver() string {
+	if x != nil {
+		return x.Receiver
+	}
+	return ""
+}
+
+func (x *Function) GetSynthetic() string {
+	if x != nil {
+		return x.Synthetic
+	}
+	return ""
+}
+
+func (x *Function) GetReferencedBy() string {
+	if x != nil {
+		return x.ReferencedBy
+	}
+	return ""
 }
 
 type CallSite struct {
@@ -217,12 +257,18 @@ const file_ssa_proto_rawDesc = "" +
 	"\tssa.proto\x12\x03ssa\"1\n" +
 	"\aPackage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04path\x18\x02 \x01(\tR\x04path\"x\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\"\x9d\x02\n" +
 	"\bFunction\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\tR\x04hash\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
 	"\tsignature\x18\x03 \x01(\tR\tsignature\x12&\n" +
-	"\apackage\x18\x04 \x01(\v2\f.ssa.PackageR\apackage\"\x95\x01\n" +
+	"\apackage\x18\x04 \x01(\v2\f.ssa.PackageR\apackage\x12%\n" +
+	"\x06parent\x18\x05 \x01(\v2\r.ssa.FunctionR\x06parent\x12\x1d\n" +
+	"\n" +
+	"anon_index\x18\x06 \x01(\x05R\tanonIndex\x12\x1a\n" +
+	"\breceiver\x18\a \x01(\tR\breceiver\x12\x1c\n" +
+	"\tsynthetic\x18\b \x01(\tR\tsynthetic\x12#\n" +
+	"\rreferenced_by\x18\t \x01(\tR\freferencedBy\"\x95\x01\n" +
 	"\bCallSite\x12\x12\n" +
 	"\x04hash\x18\x01 \x01(\tR\x04hash\x126\n" +
 	"\x0fparent_function\x18\x02 \x01(\v2\r.ssa.FunctionR\x0eparentFunction\x12\x1c\n" +
@@ -250,12 +296,13 @@ var file_ssa_proto_goTypes = []any{
 }
 var file_ssa_proto_depIdxs = []int32{
 	0, // 0: ssa.Function.package:type_name -> ssa.Package
-	1, // 1: ssa.CallSite.parent_function:type_name -> ssa.Function
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	1, // 1: ssa.Function.parent:type_name -> ssa.Function
+	1, // 2: ssa.CallSite.parent_function:type_name -> ssa.Function
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_ssa_proto_init() }
