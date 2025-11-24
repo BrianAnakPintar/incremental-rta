@@ -1,13 +1,22 @@
-package serializer
+package rta_test
 
 import (
+	"bytes"
 	"fmt"
+	"go/token"
+	"log"
 	"os"
+	"path/filepath"
 	"rta"
+	"rta/serializer"
+	"sort"
 	"testing"
 	"time"
 
+	"golang.org/x/tools/go/callgraph"
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
 )
 
 func TestIncrementalRTA(t *testing.T) {
@@ -18,38 +27,38 @@ func TestIncrementalRTA(t *testing.T) {
 	}{
 		{
 			name:      "simple",
-			srcBefore: "../tests/simple/before.go",
-			srcAfter:  "../tests/simple/after.go",
+			srcBefore: "tests/simple/before.go",
+			srcAfter:  "tests/simple/after.go",
 		},
 		{
 			name:      "deletion",
-			srcBefore: "../tests/deletion/before.go",
-			srcAfter:  "../tests/deletion/after.go",
+			srcBefore: "tests/deletion/before.go",
+			srcAfter:  "tests/deletion/after.go",
 		},
 		{
 			name:      "fnptr",
-			srcBefore: "../tests/fnptr/before.go",
-			srcAfter:  "../tests/fnptr/after.go",
+			srcBefore: "tests/fnptr/before.go",
+			srcAfter:  "tests/fnptr/after.go",
 		},
 		{
 			name:      "closures",
-			srcBefore: "../tests/closures/before.go",
-			srcAfter:  "../tests/closures/after.go",
+			srcBefore: "tests/closures/before.go",
+			srcAfter:  "tests/closures/after.go",
 		},
 		{
 			name:      "recursion",
-			srcBefore: "../tests/recursion/before.go",
-			srcAfter:  "../tests/recursion/after.go",
+			srcBefore: "tests/recursion/before.go",
+			srcAfter:  "tests/recursion/after.go",
 		},
 		{
 			name:      "mutual_recursion",
-			srcBefore: "../tests/mutual_recursion/before.go",
-			srcAfter:  "../tests/mutual_recursion/after.go",
+			srcBefore: "tests/mutual_recursion/before.go",
+			srcAfter:  "tests/mutual_recursion/after.go",
 		},
 		{
 			name:      "interfaces_add",
-			srcBefore: "../tests/interfaces_add/before.go",
-			srcAfter:  "../tests/interfaces_add/after.go",
+			srcBefore: "tests/interfaces_add/before.go",
+			srcAfter:  "tests/interfaces_add/after.go",
 		},
 	}
 
@@ -80,7 +89,7 @@ func TestIncrementalRTA(t *testing.T) {
 			t.Logf("Before call graph:\n%s", beforeDOT)
 
 			// Serialize the "before" result
-			ser := NewSerializer()
+			ser := serializer.NewSerializer()
 			pbResult := ser.SerializeRTAResult(resultBefore.Result)
 			pbState := ser.SerializeRTAState(resultBefore.State)
 
@@ -92,7 +101,7 @@ func TestIncrementalRTA(t *testing.T) {
 
 			// Deserialize into the "after" program's context
 			startDeserialize := time.Now()
-			deser := NewDeserializer(progAfter)
+			deser := serializer.NewDeserializer(progAfter)
 			deserializedResult := deser.DeserializeRTAResult(pbResult)
 			deserializedState := deser.DeserializeRTAState(pbState)
 			deserializeDuration := time.Since(startDeserialize)
@@ -180,4 +189,61 @@ func TestIncrementalRTA(t *testing.T) {
 			t.Log("Incremental RTA test passed - results match full RTA")
 		})
 	}
+}
+
+func LoadTestProgram(path string) (*ssa.Program, *ssa.Package, error) {
+	cfg := &packages.Config{
+		Mode: packages.LoadAllSyntax,
+		Fset: token.NewFileSet(),
+		Dir:  filepath.Dir(path),
+	}
+	file := filepath.Base(path)
+	pkgs, err := packages.Load(cfg, file)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	mode := ssa.InstantiateGenerics
+	prog, pkgsSSA := ssautil.AllPackages(pkgs, mode)
+	prog.Build()
+
+	var mainPkg *ssa.Package
+	for _, p := range pkgsSSA {
+		if p.Pkg.Name() == "main" {
+			mainPkg = p
+			break
+		}
+	}
+	if mainPkg == nil {
+		log.Fatalf("no main package found")
+	}
+
+	return prog, mainPkg, nil
+}
+
+func callGraphToDOT(cg *callgraph.Graph) string {
+	type edge struct {
+		caller, callee string
+	}
+	var edges []edge
+	for _, node := range cg.Nodes {
+		for _, out := range node.Out {
+			caller := out.Caller.Func.String()
+			callee := out.Callee.Func.String()
+			edges = append(edges, edge{caller, callee})
+		}
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].caller != edges[j].caller {
+			return edges[i].caller < edges[j].caller
+		}
+		return edges[i].callee < edges[j].callee
+	})
+	var buf bytes.Buffer
+	buf.WriteString("digraph {\n")
+	for _, e := range edges {
+		buf.WriteString(fmt.Sprintf("  \"%s\" -> \"%s\";\n", e.caller, e.callee))
+	}
+	buf.WriteString("}\n")
+	return buf.String()
 }
