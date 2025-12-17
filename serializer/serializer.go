@@ -13,6 +13,7 @@ type Serializer struct {
 	functions map[*ssa.Function]*pb.Function
 	callsites map[ssa.CallInstruction]*pb.CallSite
 	nodes     map[*callgraph.Node]*pb.Node
+	edges     map[*callgraph.Edge]*pb.Edge
 }
 
 func NewSerializer() *Serializer {
@@ -20,12 +21,13 @@ func NewSerializer() *Serializer {
 		functions: make(map[*ssa.Function]*pb.Function),
 		callsites: make(map[ssa.CallInstruction]*pb.CallSite),
 		nodes:     make(map[*callgraph.Node]*pb.Node),
+		edges:     make(map[*callgraph.Edge]*pb.Edge),
 	}
 }
 
 // === ssa serialization ===
 
-func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
+func (s *Serializer) SerializeFunction(f *ssa.Function) *pb.Function {
 	if f == nil {
 		panic("Something went wrong. Trying to serialize a nil function")
 	}
@@ -49,7 +51,7 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 			Name:      f.Name(),
 			Package:   &pb.Package{Name: "unknown", Path: "unknown"}, // TODO: leave for now
 			Signature: f.Signature.String(),
-			Hash:      hashFunction(f),
+			Hash:      HashFunction(f),
 		}
 		s.functions[f] = res
 		return res
@@ -59,14 +61,14 @@ func (s *Serializer) serializeFunction(f *ssa.Function) *pb.Function {
 		Name:      f.Name(),
 		Package:   pkg,
 		Signature: f.Signature.String(),
-		Hash:      hashFunction(f),
+		Hash:      HashFunction(f),
 	}
 
 	s.functions[f] = res
 	return res
 }
 
-func (s *Serializer) serializeCallSite(ci ssa.CallInstruction) *pb.CallSite {
+func (s *Serializer) SerializeCallSite(ci ssa.CallInstruction) *pb.CallSite {
 	if ci == nil {
 		// There are some cases where the callsite is nil, I don't understand why yet.
 		// GPT says:
@@ -87,8 +89,8 @@ func (s *Serializer) serializeCallSite(ci ssa.CallInstruction) *pb.CallSite {
 	}
 
 	res := &pb.CallSite{
-		Hash:           hashCallSite(ci),
-		ParentFunction: s.serializeFunction(ci.Parent()),
+		Hash:           HashCallSite(ci),
+		ParentFunction: s.SerializeFunction(ci.Parent()),
 		Signature:      ci.Common().Signature().String(),
 		BlockIndex:     int32(ci.Block().Index),
 	}
@@ -101,18 +103,24 @@ func (s *Serializer) serializeCallSite(ci ssa.CallInstruction) *pb.CallSite {
 
 // === Graph serialization ===
 
-func (s *Serializer) serializeEdge(e *callgraph.Edge) *pb.Edge {
+func (s *Serializer) SerializeEdge(e *callgraph.Edge) *pb.Edge {
 	if e == nil {
 		panic("Something went wrong. Trying to serialize a nil edge")
 	}
-	return &pb.Edge{
-		Caller: s.serializeFunction(e.Caller.Func),
-		Site:   s.serializeCallSite(e.Site),
-		Callee: s.serializeFunction(e.Callee.Func),
+	if existing, ok := s.edges[e]; ok {
+		return existing
 	}
+
+	pbEdge := &pb.Edge{
+		Caller: s.SerializeFunction(e.Caller.Func),
+		Site:   s.SerializeCallSite(e.Site),
+		Callee: s.SerializeFunction(e.Callee.Func),
+	}
+	s.edges[e] = pbEdge
+	return pbEdge
 }
 
-func (s *Serializer) serializeNode(n *callgraph.Node) *pb.Node {
+func (s *Serializer) SerializeNode(n *callgraph.Node) *pb.Node {
 	if existing, ok := s.nodes[n]; ok {
 		return existing
 	}
@@ -122,7 +130,7 @@ func (s *Serializer) serializeNode(n *callgraph.Node) *pb.Node {
 	}
 
 	pbNode := &pb.Node{
-		Function: s.serializeFunction(n.Func),
+		Function: s.SerializeFunction(n.Func),
 		In:       make([]*pb.Edge, 0, len(n.In)),
 		Out:      make([]*pb.Edge, 0, len(n.Out)),
 	}
@@ -130,14 +138,14 @@ func (s *Serializer) serializeNode(n *callgraph.Node) *pb.Node {
 	s.nodes[n] = pbNode
 
 	for _, inEdge := range n.In {
-		pbEdge := s.serializeEdge(inEdge)
+		pbEdge := s.SerializeEdge(inEdge)
 		if pbEdge != nil {
 			pbNode.In = append(pbNode.In, pbEdge)
 		}
 	}
 
 	for _, outEdge := range n.Out {
-		pbEdge := s.serializeEdge(outEdge)
+		pbEdge := s.SerializeEdge(outEdge)
 		if pbEdge != nil {
 			pbNode.Out = append(pbNode.Out, pbEdge)
 		}
@@ -148,12 +156,12 @@ func (s *Serializer) serializeNode(n *callgraph.Node) *pb.Node {
 
 func (s *Serializer) serializeCallGraph(cg *callgraph.Graph) *pb.CallGraph {
 	pbCG := &pb.CallGraph{
-		Root:  s.serializeNode(cg.Root),
+		Root:  s.SerializeNode(cg.Root),
 		Nodes: make([]*pb.Node, 0, len(cg.Nodes)),
 	}
 
 	for _, node := range cg.Nodes {
-		pbNode := s.serializeNode(node)
+		pbNode := s.SerializeNode(node)
 		if pbNode != nil {
 			pbCG.Nodes = append(pbCG.Nodes, pbNode)
 		}
@@ -172,7 +180,7 @@ func (s *Serializer) SerializeRTAResult(rtaResult *rta.Result) *pb.RTAResult {
 	}
 
 	for fn, addrTaken := range rtaResult.Reachable {
-		pbFn := s.serializeFunction(fn)
+		pbFn := s.SerializeFunction(fn)
 		pbRTAResult.Reachable = append(pbRTAResult.Reachable, &pb.ReachableEntry{
 			Function:     pbFn,
 			AddressTaken: addrTaken.AddrTaken,
@@ -201,7 +209,7 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 
 	// Only serialize ReflectValueCall if it's not nil
 	if rtaState.ReflectValueCall != nil {
-		pbRTAState.ReflectValueCall = s.serializeFunction(rtaState.ReflectValueCall)
+		pbRTAState.ReflectValueCall = s.SerializeFunction(rtaState.ReflectValueCall)
 	}
 
 	for _, sig := range rtaState.AddrTakenFuncsBySig.Keys() {
@@ -212,7 +220,7 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		}
 		pbFuncs := make([]*pb.Function, 0, len(funcs))
 		for _, fn := range funcs {
-			pbFuncs = append(pbFuncs, s.serializeFunction(fn))
+			pbFuncs = append(pbFuncs, s.SerializeFunction(fn))
 		}
 
 		pbRTAState.AddrTakenFuncsBySig[sig.String()] = &pb.ListOfFunctions{Functions: pbFuncs}
@@ -222,7 +230,7 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		sites := rtaState.DynCallSites.At(sig).([]ssa.CallInstruction)
 		pbSites := make([]*pb.CallSite, 0, len(sites))
 		for _, site := range sites {
-			pbSites = append(pbSites, s.serializeCallSite(site))
+			pbSites = append(pbSites, s.SerializeCallSite(site))
 		}
 
 		pbRTAState.DynCallSites[sig.String()] = &pb.ListOfCallSites{CallSites: pbSites}
@@ -236,7 +244,7 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		sites := rtaState.InvokeSites.At(sig).([]ssa.CallInstruction)
 		pbSites := make([]*pb.CallSite, 0, len(sites))
 		for _, site := range sites {
-			pbSites = append(pbSites, s.serializeCallSite(site))
+			pbSites = append(pbSites, s.SerializeCallSite(site))
 		}
 		pbRTAState.InvokeSites[sig.String()] = &pb.ListOfCallSites{CallSites: pbSites}
 	}
@@ -245,14 +253,14 @@ func (s *Serializer) SerializeRTAState(rtaState *rta.RTAState) *pb.RTAState {
 		if pbRTAState.Summary == nil {
 			pbRTAState.Summary = make(map[string]*pb.MethodSummary)
 		}
-		pbRTAState.Summary[hashFunction(fn)] = s.SerializeRTAMethodSummaries(map[*ssa.Function]*rta.MethodSummary{fn: summary})[hashFunction(fn)]
+		pbRTAState.Summary[HashFunction(fn)] = s.SerializeRTAMethodSummaries(map[*ssa.Function]*rta.MethodSummary{fn: summary})[HashFunction(fn)]
 	}
 
 	// Serialize roots so the deserializer can reconstruct rta.State.Roots
 	if len(rtaState.Roots) > 0 {
 		pbRTAState.Roots = make([]*pb.Function, 0, len(rtaState.Roots))
 		for _, root := range rtaState.Roots {
-			pbRTAState.Roots = append(pbRTAState.Roots, s.serializeFunction(root))
+			pbRTAState.Roots = append(pbRTAState.Roots, s.SerializeFunction(root))
 		}
 	}
 
@@ -265,15 +273,15 @@ func (s *Serializer) SerializeRTAMethodSummaries(summaries map[*ssa.Function]*rt
 	for fn, summary := range summaries {
 		pbProvenance := make([]*pb.Function, 0, len(summary.Provenance))
 		for _, provFn := range summary.Provenance {
-			pbProvenance = append(pbProvenance, s.serializeFunction(provFn))
+			pbProvenance = append(pbProvenance, s.SerializeFunction(provFn))
 		}
 
 		pbFuncsCreated := make([]*pb.Function, 0, len(summary.FunctionsCreated))
 		for _, createdFn := range summary.FunctionsCreated {
-			pbFuncsCreated = append(pbFuncsCreated, s.serializeFunction(createdFn))
+			pbFuncsCreated = append(pbFuncsCreated, s.SerializeFunction(createdFn))
 		}
 
-		pbSummaries[hashFunction(fn)] = &pb.MethodSummary{
+		pbSummaries[HashFunction(fn)] = &pb.MethodSummary{
 			Provenance:       pbProvenance,
 			FunctionsCreated: pbFuncsCreated,
 		}

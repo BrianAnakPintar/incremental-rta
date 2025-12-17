@@ -13,7 +13,7 @@ import (
 )
 
 type Deserializer struct {
-	prog     *ssa.Program
+	Prog     *ssa.Program
 	packages map[string]*ssa.Package
 
 	// fields for faster lookup :)
@@ -22,7 +22,7 @@ type Deserializer struct {
 	nodes     map[string]*callgraph.Node
 	edges     map[string]*callgraph.Edge
 	// map of type string -> types.Type discovered in the program
-	typesMap map[string]types.Type
+	TypesMap map[string]types.Type
 
 	Diff *Diff
 }
@@ -38,13 +38,13 @@ func NewDeserializer(prog *ssa.Program) *Deserializer {
 		packages[pkg.Pkg.Path()] = pkg
 	}
 	res := &Deserializer{
-		prog:      prog,
+		Prog:      prog,
 		packages:  packages,
 		functions: make(map[string]*ssa.Function),
 		callSites: make(map[string]ssa.CallInstruction),
 		nodes:     make(map[string]*callgraph.Node),
 		edges:     make(map[string]*callgraph.Edge),
-		typesMap:  make(map[string]types.Type),
+		TypesMap:  make(map[string]types.Type),
 		Diff: &Diff{
 			ModifiedFunctions: make([]*ssa.Function, 0),
 			RemovedFunctions:  make([]*pb.Function, 0),
@@ -60,7 +60,7 @@ func (d *Deserializer) deserializeAllFunctions() {
 	visitedTypes := make(map[string]bool) // Use string representation to avoid issues with type identity
 
 	// First, collect all types from package members
-	for _, pkg := range d.prog.AllPackages() {
+	for _, pkg := range d.Prog.AllPackages() {
 		for _, member := range pkg.Members {
 			if t, ok := member.(*ssa.Type); ok {
 				d.exploreTypeRecursively(t.Type(), visitedTypes)
@@ -70,17 +70,17 @@ func (d *Deserializer) deserializeAllFunctions() {
 
 	// Also collect types from all functions' signatures and instructions,
 	// including functions with pkg=nil (like generated/synthetic functions)
-	fns := ssautil.AllFunctions(d.prog)
+	fns := ssautil.AllFunctions(d.Prog)
 	for fn := range fns {
-		hash := hashFunction(fn)
+		hash := HashFunction(fn)
 		d.functions[hash] = fn
-		d.collectTypesFromFunction(fn, visitedTypes)
+		d.CollectTypesFromFunction(fn, visitedTypes)
 	}
 
 }
 
-// collectTypesFromFunction extracts types from a function and its instructions
-func (d *Deserializer) collectTypesFromFunction(fn *ssa.Function, visitedTypes map[string]bool) {
+// CollectTypesFromFunction extracts types from a function and its instructions
+func (d *Deserializer) CollectTypesFromFunction(fn *ssa.Function, visitedTypes map[string]bool) {
 	// Add types from function signature
 	if fn.Signature != nil {
 		if fn.Signature.Params() != nil {
@@ -129,20 +129,20 @@ func (d *Deserializer) exploreTypeRecursively(typ types.Type, visitedTypes map[s
 	visitedTypes[typeStr] = true
 
 	// Record the type in the types map for later lookup during deserialization
-	if d.typesMap == nil {
-		d.typesMap = make(map[string]types.Type)
+	if d.TypesMap == nil {
+		d.TypesMap = make(map[string]types.Type)
 	}
-	d.typesMap[typeStr] = typ
+	d.TypesMap[typeStr] = typ
 
 	// Add exported methods for this type
-	mset := d.prog.MethodSets.MethodSet(typ)
+	mset := d.Prog.MethodSets.MethodSet(typ)
 	for i := 0; i < mset.Len(); i++ {
 		sel := mset.At(i)
 		m := sel.Obj()
 		if m.Exported() {
-			methodValue := d.prog.MethodValue(sel)
+			methodValue := d.Prog.MethodValue(sel)
 			if methodValue != nil {
-				hash := hashFunction(methodValue)
+				hash := HashFunction(methodValue)
 				d.functions[hash] = methodValue
 			}
 		}
@@ -206,6 +206,18 @@ func (d *Deserializer) exploreEmbeddedTypesRecursively(typ types.Type, visitedTy
 	}
 }
 
+// GetType attempts to resolve a type string to a types.Type.
+// It checks the cache first, and if not found, it tries to look it up in the program.
+func (d *Deserializer) GetType(typeStr string) types.Type {
+	if t, ok := d.TypesMap[typeStr]; ok {
+		return t
+	}
+	// TODO: Implement lookup logic for named types if needed.
+	// For now, we rely on TypesMap being populated.
+	// If not found, it might be a type that no longer exists in the current program.
+	return nil
+}
+
 func (d *Deserializer) deserializeFunction(f *pb.Function) *ssa.Function {
 	if f == nil {
 		panic("function is nil, should not happen ever")
@@ -218,7 +230,7 @@ func (d *Deserializer) deserializeFunction(f *pb.Function) *ssa.Function {
 	var pkg *ssa.Package
 	pkg, ok := d.packages[f.Package.Path]
 	if !ok {
-		pkg = d.prog.Package(d.prog.ImportedPackage(f.Package.Path).Pkg)
+		pkg = d.Prog.Package(d.Prog.ImportedPackage(f.Package.Path).Pkg)
 		d.packages[f.Package.Path] = pkg
 	}
 
@@ -236,7 +248,7 @@ func (d *Deserializer) deserializeFunction(f *pb.Function) *ssa.Function {
 	return fn
 }
 
-func (d *Deserializer) deserializeCallSite(cs *pb.CallSite) ssa.CallInstruction {
+func (d *Deserializer) DeserializeCallSite(cs *pb.CallSite) ssa.CallInstruction {
 	if cs == nil {
 		return nil
 	}
@@ -255,7 +267,7 @@ func (d *Deserializer) deserializeCallSite(cs *pb.CallSite) ssa.CallInstruction 
 			if !ok {
 				continue
 			}
-			if hashCallSite(ci) == cs.Hash {
+			if HashCallSite(ci) == cs.Hash {
 				d.callSites[cs.Hash] = ci
 				return ci
 			}
@@ -273,7 +285,7 @@ func (d *Deserializer) deserializeEdge(e *pb.Edge) *callgraph.Edge {
 		return nil
 	}
 
-	site := d.deserializeCallSite(e.Site)
+	site := d.DeserializeCallSite(e.Site)
 
 	// Get the callgraph nodes
 	callerNd, ok := d.nodes[e.Caller.Hash]
@@ -407,7 +419,7 @@ func (d *Deserializer) DeserializeRTAResult(pbRTAResult *pb.RTAResult) *rta.Resu
 	hasher := typeutil.MakeHasher()
 	res.RuntimeTypes.SetHasher(hasher)
 	for typeStr, skip := range pbRTAResult.RuntimeTypes {
-		if T, ok := d.typesMap[typeStr]; ok {
+		if T, ok := d.TypesMap[typeStr]; ok {
 			res.RuntimeTypes.Set(T, skip)
 		}
 	}
@@ -459,7 +471,7 @@ func (d *Deserializer) DeserializeRTAState(pbRTAState *pb.RTAState) *rta.RTAStat
 		var sigType types.Type
 
 		for _, pbCS := range pbListOfCallSites.CallSites {
-			cs := d.deserializeCallSite(pbCS)
+			cs := d.DeserializeCallSite(pbCS)
 			if cs != nil {
 				callSites = append(callSites, cs)
 				// Use the signature from the first valid call site
@@ -481,7 +493,7 @@ func (d *Deserializer) DeserializeRTAState(pbRTAState *pb.RTAState) *rta.RTAStat
 		var sigType types.Type
 
 		for _, pbCS := range pbListOfCallSites.CallSites {
-			cs := d.deserializeCallSite(pbCS)
+			cs := d.DeserializeCallSite(pbCS)
 			if cs != nil {
 				callSites = append(callSites, cs)
 				// Use the interface type from the first valid call site

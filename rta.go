@@ -750,6 +750,9 @@ func IncrementalAnalyze(roots []*ssa.Function, prevRun *ResultWithState) *Result
 	r.result.RuntimeTypes.SetHasher(hasher)
 	r.concreteTypes.SetHasher(hasher)
 	r.interfaceTypes.SetHasher(hasher)
+	r.addrTakenFuncsBySig.SetHasher(hasher)
+	r.dynCallSites.SetHasher(hasher)
+	r.invokeSites.SetHasher(hasher)
 
 	// Populate concreteTypes and interfaceTypes from previously discovered
 	// runtime types so that implementations/interfaces queries work
@@ -937,6 +940,12 @@ func (r *rta) removeBasedOnProvenance(prov *ssa.Function, fn *ssa.Function) {
 
 	// If provenance is now empty, remove all dynamic in edges to fn
 	if len(summary.Provenance) == 0 {
+		// Remove from addrTakenFuncsBySig
+		S := fn.Signature
+		if funcs, ok := r.addrTakenFuncsBySig.At(S).(map[*ssa.Function]bool); ok {
+			delete(funcs, fn)
+		}
+
 		cg := r.result.CallGraph
 		if cg == nil {
 			panic("No graph in rta, we require a graph to be built for now.")
@@ -949,15 +958,17 @@ func (r *rta) removeBasedOnProvenance(prov *ssa.Function, fn *ssa.Function) {
 
 		// Remove all incoming edges and update outgoing edges of callers
 		// At some point we may want to distinguish between dynamic method and function calls.
-		inEdges := nd.In
-		for _, edge := range inEdges {
+		var edgesToRemove []*callgraph.Edge
+		for _, edge := range nd.In {
 			if strings.Contains(edge.Description(), "dynamic") {
-				removeOutEdge(edge)
-				removeInEdge(edge)
+				edgesToRemove = append(edgesToRemove, edge)
 			}
 		}
-		nd.In = nil
-		cg.Nodes[fn] = nd
+
+		for _, edge := range edgesToRemove {
+			removeOutEdge(edge)
+			removeInEdge(edge)
+		}
 
 		if len(nd.In) == 0 {
 			// No incoming edges, remove from reachable set

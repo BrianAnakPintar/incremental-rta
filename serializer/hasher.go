@@ -9,7 +9,7 @@ import (
 )
 
 // Hashes an ssa.Function into a string
-func hashFunction(f *ssa.Function) string {
+func HashFunction(f *ssa.Function) string {
 	if f == nil {
 		return ""
 	}
@@ -31,7 +31,7 @@ func hashFunction(f *ssa.Function) string {
 }
 
 // Hashes an ssa.CallInstruction into a string
-func hashCallSite(ci ssa.CallInstruction) string {
+func HashCallSite(ci ssa.CallInstruction) string {
 	if ci == nil {
 		return ""
 	}

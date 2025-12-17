@@ -60,6 +60,11 @@ func TestIncrementalRTA(t *testing.T) {
 			srcBefore: "tests/interfaces_add/before.go",
 			srcAfter:  "tests/interfaces_add/after.go",
 		},
+		{
+			name:      "slides",
+			srcBefore: "tests/repos/before/slides/main.go",
+			srcAfter:  "tests/repos/after/slides/main.go",
+		},
 	}
 
 	for _, tt := range tests {
@@ -85,8 +90,8 @@ func TestIncrementalRTA(t *testing.T) {
 			t.Logf("Before: %d reachable functions", len(resultBefore.Result.Reachable))
 			t.Logf("Before: %d call graph nodes", len(resultBefore.Result.CallGraph.Nodes))
 
-			beforeDOT := callGraphToDOT(resultBefore.Result.CallGraph)
-			t.Logf("Before call graph:\n%s", beforeDOT)
+			// beforeDOT := callGraphToDOT(resultBefore.Result.CallGraph)
+			// t.Logf("Before call graph:\n%s", beforeDOT)
 
 			// Serialize the "before" result
 			ser := serializer.NewSerializer()
